@@ -47,7 +47,7 @@ import type { Sport } from "./types.js";
 import { fixtureVenue } from "../venues/fixture.js";
 
 export const padel: Sport = {
-  id: "padel", name: "Padel", playersPerCourt: 4,
+  id: "padel", name: "Padel", playersPerCourt: 4, sessionHours: 2,
   venues: [fixtureVenue({ id: "my-venue", name: "My Venue", sport: "padel", hours: [18, 19], minutes: 60,
     pricePence: 3200, bookingUrl: "https://...", address: "..." })],
 };

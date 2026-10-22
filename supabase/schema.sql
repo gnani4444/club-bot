@@ -29,7 +29,7 @@ create table if not exists votes (
   player_id text not null references players(id),
   idx int not null,
   voted_at timestamptz not null default now(),
-  primary key (session_id, player_id)
+  primary key (session_id, player_id, idx)  -- multi-choice: one row per chosen option
 );
 
 create table if not exists rsvps (

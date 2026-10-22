@@ -10,6 +10,33 @@ export async function searchSport(sportId: string, date: string): Promise<Slot[]
     .sort((a, b) => a.start.localeCompare(b.start) || a.courtPricePence - b.courtPricePence);
 }
 
+/**
+ * Group free slots into playable windows of `hours` length: back-to-back slots at the same venue.
+ * One option per time window (the cheapest venue offering it), sorted by start time.
+ */
+export function windows(slots: Slot[], hours: number): Slot[] {
+  const byVenue = new Map<string, Slot[]>();
+  for (const s of slots) byVenue.set(s.venueId, [...(byVenue.get(s.venueId) ?? []), s]);
+  const best = new Map<string, Slot>();
+  for (const list of byVenue.values()) {
+    list.sort((a, b) => a.start.localeCompare(b.start));
+    for (let i = 0; i < list.length; i++) {
+      const run = [list[i]];
+      while (run.length < 100 && Date.parse(run[run.length - 1].end) - Date.parse(run[0].start) < hours * 3600_000) {
+        const next = list[i + run.length];
+        if (!next || next.start !== run[run.length - 1].end) break;
+        run.push(next);
+      }
+      const end = run[run.length - 1].end;
+      if (Date.parse(end) - Date.parse(run[0].start) !== hours * 3600_000) continue;
+      const w: Slot = { ...run[0], end, courtPricePence: run.reduce((t, s) => t + s.courtPricePence, 0) };
+      const prev = best.get(w.start);
+      if (!prev || w.courtPricePence < prev.courtPricePence) best.set(w.start, w);
+    }
+  }
+  return [...best.values()].sort((a, b) => a.start.localeCompare(b.start));
+}
+
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
 // "today" | "tomorrow" | "sat" | "2026-10-24" -> YYYY-MM-DD

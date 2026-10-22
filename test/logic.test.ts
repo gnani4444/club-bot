@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { winner, buildRoster, nextOnWaitlist, share, dueReminder } from "../src/logic.js";
-import { searchSport, parseDay } from "../src/search.js";
+import { searchSport, parseDay, windows } from "../src/search.js";
 import { sports } from "../src/sports/index.js";
 import { londonTime } from "../src/venues/fixture.js";
 
@@ -42,7 +42,7 @@ test("reminders fire once each, 30m wins when both due", () => {
 test("search merges venues sorted by time; every sport has venues", async () => {
   for (const s of Object.values(sports)) assert.ok(s.venues.length >= 2, s.id);
   const slots = await searchSport("badminton", "2026-10-24");
-  assert.equal(slots.length, 6);
+  assert.equal(slots.length, 16);
   assert.deepEqual(slots.map((s) => s.start), [...slots.map((s) => s.start)].sort());
   await assert.rejects(searchSport("curling", "2026-10-24"));
 });
@@ -59,4 +59,29 @@ test("parseDay", () => {
 test("londonTime handles BST and GMT", () => {
   assert.equal(londonTime("2026-10-24", 18).toISOString(), "2026-10-24T17:00:00.000Z"); // BST
   assert.equal(londonTime("2026-11-07", 18).toISOString(), "2026-11-07T18:00:00.000Z"); // GMT
+});
+
+test("windows: back-to-back slots at one venue, cheapest venue per time", async () => {
+  const w = windows(await searchSport("badminton", "2026-10-24"), 2);
+  const fmt = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" });
+  assert.deepEqual(w.map((x) => `${fmt(x.start)}-${fmt(x.end)} ${x.venueId} ${x.courtPricePence}`), [
+    "10:00-12:00 better-islington 2400",
+    "11:00-13:00 better-islington 2400",
+    "12:00-14:00 ea-westminster 2200",
+    "13:00-15:00 ea-westminster 2200",
+    "15:00-17:00 better-islington 2400",
+    "18:00-20:00 better-islington 2400",
+    "19:00-21:00 ea-westminster 2200",
+    "20:00-22:00 ea-westminster 2200",
+  ]);
+  assert.equal(windows(await searchSport("badminton", "2026-10-24"), 1).length, 12); // distinct start hours
+});
+
+test("window labels", async () => {
+  process.env.SUPABASE_URL ??= "http://x"; process.env.SUPABASE_SERVICE_KEY ??= "x";
+  const { windowLabel } = await import("../src/club.js");
+  const mk = (a: string, b: string) => ({ start: a, end: b } as Parameters<typeof windowLabel>[0]);
+  assert.equal(windowLabel(mk("2026-10-24T11:00:00Z", "2026-10-24T13:00:00Z")), "12–2pm");
+  assert.equal(windowLabel(mk("2026-10-24T10:00:00Z", "2026-10-24T12:00:00Z")), "11am–1pm");
+  assert.equal(windowLabel(mk("2026-10-24T17:30:00Z", "2026-10-24T19:30:00Z")), "6:30–8:30pm");
 });

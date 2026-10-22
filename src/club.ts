@@ -1,6 +1,6 @@
 // Club workflow: commands from the WhatsApp group and replies in DMs. Transport-agnostic (see wa.ts).
 import { db, must } from "./db.js";
-import { searchSport, parseDay } from "./search.js";
+import { searchSport, parseDay, windows } from "./search.js";
 import { sports } from "./sports/index.js";
 import type { Slot } from "./sports/types.js";
 import { winner, buildRoster, nextOnWaitlist, share, pounds, dueReminder, type Rsvp } from "./logic.js";
@@ -8,7 +8,8 @@ import { paymentLink, remember, ask, notionLog } from "./sponsors.js";
 
 export interface Chat {
   send(jid: string, text: string, mentions?: string[]): Promise<void>;
-  poll(jid: string, name: string, options: string[]): Promise<void>;
+  /** Tappable poll. With onVote, taps go to that callback (voter's JIDs, chosen 1-based options). */
+  poll(jid: string, name: string, options: string[], opts?: { single?: boolean; onVote?: (ids: string[], idxs: number[]) => Promise<unknown> }): Promise<void>;
 }
 
 interface Session {
@@ -23,7 +24,16 @@ const OFFER_TIMEOUT_MS = Number(process.env.OFFER_TIMEOUT_SEC ?? 900) * 1000;
 
 const when = (iso: string) =>
   new Date(iso).toLocaleString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-const slotLabel = (s: Slot) => `${when(s.start)} · ${s.venueName} · ${pounds(s.courtPricePence)}`;
+const hour = (iso: string) => {
+  const [h, m] = new Date(iso).toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "numeric", minute: "2-digit", hour12: true }).replace(/\s/g, "").toLowerCase().split(/(?=[ap]m)/);
+  return { t: h.replace(":00", ""), ap: m };
+};
+/** "12–2pm", "11am–1pm" */
+export const windowLabel = (s: Slot) => {
+  const a = hour(s.start), b = hour(s.end);
+  return a.ap === b.ap ? `${a.t}–${b.t}${b.ap}` : `${a.t}${a.ap}–${b.t}${b.ap}`;
+};
+const MAX_POLL_OPTIONS = 12; // WhatsApp limit
 const label = (s: Session) => `${sports[s.sport]?.name ?? s.sport} · ${s.venue_name} · ${s.start_at ? when(s.start_at) : "TBC"}`;
 const at = (jid: string) => `@${jid.split("@")[0]}`;
 
@@ -61,7 +71,7 @@ async function postRoster(chat: Chat, s: Session, header?: string) {
 const HELP = [
   "*Club Bot*",
   "!play <sport> [day]  find courts and start a vote (sports: " + Object.keys(sports).join(", ") + ")",
-  "1-5  vote by number (or use the poll)",
+  "1 3  vote by number, several allowed (or tick the poll)",
   "!close  pick the winning slot and make the roster",
   "!booked  confirm the court is booked",
   "!pay  split the cost and DM payment links",
@@ -76,13 +86,14 @@ const HELP = [
 /** Group message. Returns true if handled. */
 export async function onGroup(chat: Chat, groupJid: string, sender: string, senderName: string | null, text: string, mentions: string[]): Promise<boolean> {
   const t = text.trim();
-  if (!t.startsWith("!") && !/^[1-9]$/.test(t)) return false;
+  const numbers = /^\d{1,2}([\s,]+\d{1,2})*$/.test(t);
+  if (!t.startsWith("!") && !numbers) return false;
   await upsertPlayer(sender, senderName);
   const [cmd, ...args] = t.split(/\s+/);
 
-  if (/^[1-9]$/.test(t)) {
+  if (numbers) {
     const s = await openSession(groupJid, ["polling"]);
-    if (s && !s.venue_name) await recordVote(s.id, sender, Number(t));
+    if (s && !s.venue_name) await recordVotes(s.id, sender, t.split(/[\s,]+/).map(Number));
     return !!s;
   }
 
@@ -96,7 +107,7 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
       let date: string, slots: Slot[];
       try {
         date = parseDay(args[1]);
-        slots = (await searchSport(sport, date)).slice(0, 5);
+        slots = windows(await searchSport(sport, date), sports[sport]?.sessionHours ?? 1).slice(0, MAX_POLL_OPTIONS);
       } catch (e) {
         await chat.send(groupJid, (e as Error).message);
         return true;
@@ -104,7 +115,9 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
       if (!slots.length) { await chat.send(groupJid, `No ${sport} courts free on ${date}.`); return true; }
       const s = must(await db.from("sessions").insert({ sport, group_jid: groupJid, capacity: sports[sport].playersPerCourt }).select().single()) as Session;
       must(await db.from("slots").insert(slots.map((p, i) => ({ session_id: s.id, idx: i + 1, payload: p }))));
-      await chat.poll(groupJid, `${sports[sport].name} ${date}: which slot? (or reply 1-${slots.length})`, slots.map((p, i) => `${i + 1}. ${slotLabel(p)}`));
+      const day = new Date(slots[0].start).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
+      await chat.poll(groupJid, `${sports[sport].name} ${day}: pick every time you can play (or reply e.g. 1 3)`,
+        slots.map((p) => `${windowLabel(p)} · from ${pounds(Math.ceil(p.courtPricePence / sports[sport].playersPerCourt))}pp`));
       return true;
     }
 
@@ -115,8 +128,8 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
       const win = winner(votes);
       if (!win) { await chat.send(groupJid, "No votes yet."); return true; }
       const slot = (must(await db.from("slots").select("payload").eq("session_id", s.id).eq("idx", win).single()) as { payload: Slot }).payload;
-      // Winning-slot voters first, then everyone else who voted, so they become the waitlist.
-      const voters = [...votes.filter((v) => v.idx === win), ...votes.filter((v) => v.idx !== win)].map((v) => v.player_id);
+      // Players free for the winning window first (in vote order), then everyone else who voted, as waitlist.
+      const voters = [...new Set([...votes.filter((v) => v.idx === win), ...votes].map((v) => v.player_id))];
       const roster = buildRoster(voters, s.capacity ?? 4);
       const upd = {
         venue_name: slot.venueName, start_at: slot.start, end_at: slot.end,
@@ -125,20 +138,17 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
       must(await db.from("sessions").update(upd).eq("id", s.id));
       must(await db.from("rsvps").upsert(roster.map((r) => ({ ...r, session_id: s.id }))));
       const done = { ...s, ...upd };
-      await postRoster(chat, done, `Option ${win} wins. Booking now.`);
-      await chat.send(sender, `Book it here (one tap): ${slot.bookingUrl}\nThen send !booked in the group.`);
+      await postRoster(chat, done, `${windowLabel(slot)} wins (${votes.filter((v) => v.idx === win).length} free). Booking now.`);
+      await chat.send(sender, `Book ${label(done)} here: ${slot.bookingUrl}`);
+      await chat.poll(sender, "Tap once the court is booked", ["✅ Booked it"], { single: true, onVote: (_ids, idxs) => idxs.includes(1) ? markBooked(chat, groupJid) : Promise.resolve() });
       const names = (await rsvps(s.id)).filter((r) => r.status === "in").map((r) => r.players?.name ?? r.player_id);
       remember(`${label(done)} chosen by vote. Players: ${names.join(", ")}.`);
       return true;
     }
 
-    case "!booked": {
-      const s = await openSession(groupJid, ["polling"]);
-      if (!s?.venue_name) { await chat.send(groupJid, "Nothing to book. Run !close first."); return true; }
-      must(await db.from("sessions").update({ status: "booked" }).eq("id", s.id));
-      await postRoster(chat, { ...s, status: "booked" }, "✅ Court booked!");
+    case "!booked":
+      await markBooked(chat, groupJid);
       return true;
-    }
 
     case "!pay": {
       const s = await openSession(groupJid, ["booked"]);
@@ -196,15 +206,27 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
   return false;
 }
 
-export async function recordVote(sessionId: number, playerId: string, idx: number) {
-  await upsertPlayer(playerId);
-  must(await db.from("votes").upsert({ session_id: sessionId, player_id: playerId, idx, voted_at: new Date().toISOString() }));
+/** Replace a player's choices for this vote. Unknown option numbers are dropped. */
+async function markBooked(chat: Chat, groupJid: string) {
+  const s = await openSession(groupJid, ["polling"]);
+  if (!s?.venue_name) { await chat.send(groupJid, "Nothing to book. Run !close first."); return; }
+  must(await db.from("sessions").update({ status: "booked" }).eq("id", s.id));
+  await postRoster(chat, { ...s, status: "booked" }, "✅ Court booked!");
 }
 
-/** Poll vote from WhatsApp poll UI: newest polling session in the group. */
-export async function onPollVote(groupJid: string, voter: string, idx: number) {
+export async function recordVotes(sessionId: number, playerId: string, idxs: number[]) {
+  await upsertPlayer(playerId);
+  const valid = (must(await db.from("slots").select("idx").eq("session_id", sessionId)) as { idx: number }[]).map((r) => r.idx);
+  const picks = [...new Set(idxs)].filter((i) => valid.includes(i));
+  must(await db.from("votes").delete().match({ session_id: sessionId, player_id: playerId }));
+  const now = new Date().toISOString();
+  if (picks.length) must(await db.from("votes").insert(picks.map((idx) => ({ session_id: sessionId, player_id: playerId, idx, voted_at: now }))));
+}
+
+/** Poll vote from WhatsApp poll UI (full current selection): newest polling session in the group. */
+export async function onPollVote(groupJid: string, voter: string, idxs: number[]) {
   const s = await openSession(groupJid, ["polling"]);
-  if (s && !s.venue_name) await recordVote(s.id, voter, idx);
+  if (s && !s.venue_name) await recordVotes(s.id, voter, idxs);
 }
 
 /** Direct message. `ids` = every JID WhatsApp gave for the sender (phone JID and/or @lid). */
@@ -239,7 +261,7 @@ export async function onDm(chat: Chat, ids: string[], text: string): Promise<boo
     await chat.send(r.player_id, `You're in! ${label(s)}\n${s.maps_url ?? ""}`);
     await postRoster(chat, s, `🎉 ${at(r.player_id)} takes the spot.`);
   } else if (r.status === "in") {
-    await chat.send(r.player_id, "You're already playing.");
+    await chat.send(r.player_id, "👍 You're in. See you there!");
   } else {
     await chat.send(r.player_id, "You're on the waitlist. I'll DM you if a spot opens.");
   }
@@ -253,14 +275,22 @@ async function offerNext(chat: Chat, s: Session) {
   if (!next) { await chat.send(s.group_jid, `A spot is open for ${label(s)} and the waitlist is empty. Anyone?`); return; }
   must(await db.from("rsvps").update({ status: "offered", offered_at: new Date().toISOString() }).match({ session_id: s.id, player_id: next.player_id }));
   const mins = Math.round(OFFER_TIMEOUT_MS / 60_000) || 1;
-  await chat.send(next.player_id, `A spot opened up! ${label(s)}\nReply IN within ${mins} min to take it, or OUT to pass.`);
+  await chat.send(next.player_id, `A spot opened up! ${label(s)}\nTap below within ${mins} min (or reply IN / OUT).`);
+  await chat.poll(next.player_id, "Want the spot?", ["✅ Take the spot", "❌ Pass"], { single: true, onVote: (ids, idxs) => tapReply(chat, ids, idxs, "IN", "OUT") });
 }
 
 async function remind(chat: Chat, s: Session, playerId: string, kind?: "2h" | "30m") {
   const start = s.start_at ? new Date(s.start_at) : undefined;
   const mins = start ? Math.max(0, Math.round((start.getTime() - Date.now()) / 60_000)) : undefined;
   const lead = kind === "30m" ? "Starting in 30 minutes" : kind === "2h" ? "Starting in 2 hours" : mins !== undefined ? `Starts in ${Math.floor(mins / 60)}h ${mins % 60}m` : "Reminder";
-  await chat.send(playerId, `⏰ ${lead}: ${label(s)}\n📍 ${s.maps_url ?? ""}\nCan't make it? Reply OUT so someone else can play.`);
+  await chat.send(playerId, `⏰ ${lead}: ${label(s)}\n📍 ${s.maps_url ?? ""}\nCan't make it? Tap below (or reply OUT) so someone else can play.`);
+  await chat.poll(playerId, "Still coming?", ["✅ I'm coming", "❌ Can't make it"], { single: true, onVote: (ids, idxs) => tapReply(chat, ids, idxs, "IN", "OUT") });
+}
+
+/** Poll tap -> same path as typing the word. Option 1 = yes, option 2 = no. */
+async function tapReply(chat: Chat, ids: string[], idxs: number[], yes: string, no: string) {
+  if (idxs.includes(2)) await onDm(chat, ids, no);
+  else if (idxs.includes(1)) await onDm(chat, ids, yes);
 }
 
 /** Every tick: due reminders and expired waitlist offers. */

@@ -9,11 +9,14 @@ const { db } = await import("../src/db.js");
 
 const G = "e2e-test@g.us";
 const [org, a, b, c, d, e] = ["org", "a", "b", "c", "d", "e"].map((x) => `e2e-${x}@s.whatsapp.net`);
-const sent: { to: string; text: string }[] = [];
+type OnVote = (ids: string[], idxs: number[]) => Promise<unknown>;
+const sent: { to: string; text: string; onVote?: OnVote }[] = [];
 const chat = {
   async send(to: string, text: string) { sent.push({ to, text }); },
-  async poll(to: string, name: string, options: string[]) { sent.push({ to, text: `[POLL] ${name}\n${options.join("\n")}` }); },
+  async poll(to: string, name: string, options: string[], opts?: { onVote?: OnVote }) { sent.push({ to, text: `[POLL] ${name}\n${options.join("\n")}`, onVote: opts?.onVote }); },
 };
+/** Simulate tapping option(s) on the newest poll sent to `who`. */
+const tap = (who: string, ...idxs: number[]) => [...sent].reverse().find((m) => m.to === who && m.onVote)!.onVote!([who], idxs);
 const last = (to: string) => [...sent].reverse().find((m) => m.to === to)?.text ?? "";
 const step = (name: string) => console.log(`\n=== ${name} ===`);
 const g = (who: string, text: string, mentions: string[] = []) => onGroup(chat, G, who, who.split("@")[0], text, mentions);
@@ -26,31 +29,32 @@ try {
 
   step("play: search + poll");
   await g(org, "!play badminton sat");
-  assert.match(last(G), /\[POLL\] Badminton/); console.log(last(G));
+  assert.match(last(G), /\[POLL\] Badminton/); assert.match(last(G), /12–2pm/); console.log(last(G));
 
   step("votes: numbers + poll vote, re-vote overrides");
-  await g(a, "2"); await g(b, "2"); await g(c, "1"); await g(d, "2");
-  await onPollVote(G, e, 2); await g(c, "2"); // c changes mind
+  await g(a, "2 3"); await g(b, "2"); await g(c, "1"); await g(d, "2, 5, 99"); // multi-choice; 99 ignored
+  await onPollVote(G, e, [2]); await g(c, "2"); // c changes mind (replaces "1")
   await g(org, "!close");
-  console.log(last(G)); assert.match(last(G), /Option 2 wins/);
-  assert.match(last(org), /Book it here/);
+  console.log(last(G)); assert.match(last(G), /11am–1pm wins \(5 free\)/);
+  assert.match(last(org), /\[POLL\] Tap once the court is booked/);
 
-  step("booked");
-  await g(org, "!booked"); assert.match(last(G), /Court booked/); console.log(last(G));
+  step("booked (organiser taps the poll)");
+  await tap(org, 1); assert.match(last(G), /Court booked/); console.log(last(G));
   await g(org, "1"); // votes after close are ignored
 
   step("pay + paid");
-  await g(org, "!pay"); console.log(last(G)); assert.match(last(G), /÷ 4 = £/);
+  await g(org, "!pay"); console.log(last(G)); assert.match(last(G), /£24.00 ÷ 4 = £6.00/);
   assert.match(last(a), /Your share/);
   await g(org, "!paid", [a]); assert.match(last(G), /Payment noted/);
 
   step("remind (forced) + scheduled tick does nothing yet");
-  await g(org, "!remind"); assert.match(last(a), /Reply OUT/); console.log(last(a));
+  await g(org, "!remind"); assert.match(last(a), /\[POLL\] Still coming\?/);
+  await tap(a, 1); assert.match(last(a), /You're in/);
 
   step("KILLER DEMO: OUT -> waitlist offered -> IN");
-  await onDm(chat, [b], "out");
-  assert.match(last(G), /dropped out/); assert.match(last(c), /spot opened up/); console.log(last(c));
-  await onDm(chat, [c], "IN"); assert.match(last(G), /takes the spot/); console.log(last(G));
+  await tap(b, 2); // b taps "Can't make it" on the reminder
+  assert.match(last(G), /dropped out/); assert.match(last(c), /Want the spot/);
+  await tap(c, 1); // c taps "Take the spot" assert.match(last(G), /takes the spot/); console.log(last(G));
 
   step("drop-out with empty waitlist");
   await onDm(chat, [d], "OUT");
@@ -58,7 +62,7 @@ try {
 
   step("DM edge cases");
   await onDm(chat, ["e2e-stranger@s.whatsapp.net"], "OUT"); assert.match(last("e2e-stranger@s.whatsapp.net"), /not on any upcoming/);
-  await onDm(chat, [a], "IN"); assert.match(last(a), /already playing/);
+  await onDm(chat, [a], "IN"); assert.match(last(a), /You're in/);
   await onDm(chat, [b], "IN"); assert.match(last(b), /not on any upcoming/); // dropped out earlier
   assert.equal(await onDm(chat, [a], "hello"), false);
 

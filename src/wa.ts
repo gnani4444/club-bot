@@ -8,7 +8,7 @@ import type { Chat } from "./club.js";
 export interface Handlers {
   group(chat: Chat, groupJid: string, sender: string, name: string | null, text: string, mentions: string[]): Promise<unknown>;
   dm(chat: Chat, ids: string[], text: string): Promise<unknown>;
-  pollVote(groupJid: string, voter: string, idx: number): Promise<unknown>;
+  pollVote(groupJid: string, voter: string, idxs: number[]): Promise<unknown>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -16,7 +16,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function startWhatsApp(h: Handlers): Promise<Chat> {
   let sock: WASocket;
   // Sent polls, kept to decrypt votes (Baileys rc14 no longer decrypts them itself).
-  const polls = new Map<string, { msg: WAMessage; hashes: string[] }>();
+  // shortcut: kept in memory, so taps on polls sent before a restart are ignored (typed replies still work).
+  const polls = new Map<string, { msg: WAMessage; hashes: string[]; onVote?: (ids: string[], idxs: number[]) => Promise<unknown> }>();
 
   // One outgoing message per second to stay under WhatsApp's spam radar.
   let queue: Promise<unknown> = Promise.resolve();
@@ -28,10 +29,11 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
 
   const chat: Chat = {
     send: (jid, text, mentions) => enqueue(() => sock.sendMessage(jid, { text, mentions })),
-    poll: (jid, name, values) =>
+    poll: (jid, name, values, opts) =>
       enqueue(async () => {
-        const msg = await sock.sendMessage(jid, { poll: { name, values, selectableCount: 1 } });
-        if (msg?.key.id) polls.set(msg.key.id, { msg, hashes: values.map((v) => createHash("sha256").update(v).digest("hex")) });
+        // selectableCount 0 = tick any number
+        const msg = await sock.sendMessage(jid, { poll: { name, values, selectableCount: opts?.single ? 1 : 0 } });
+        if (msg?.key.id) polls.set(msg.key.id, { msg, hashes: values.map((v) => createHash("sha256").update(v).digest("hex")), onVote: opts?.onVote });
       }),
   };
 
@@ -67,7 +69,7 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
     const isGroup = jid.endsWith("@g.us");
 
     const vote = m.message.pollUpdateMessage;
-    if (vote && isGroup) {
+    if (vote) {
       const poll = polls.get(vote.pollCreationMessageKey?.id ?? "");
       const secret = poll?.msg.message?.messageContextInfo?.messageSecret;
       if (!poll || !secret || !vote.vote) return;
@@ -78,11 +80,11 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
             pollEncKey: secret, pollMsgId: poll.msg.key.id!,
             pollCreatorJid: getKeyAuthor(poll.msg.key, me), voterJid: getKeyAuthor(m.key, me),
           });
-          const picked = dec.selectedOptions?.[0];
-          if (picked) {
-            const idx = poll.hashes.indexOf(Buffer.from(picked).toString("hex")) + 1;
-            if (idx > 0) await h.pollVote(jid, m.key.participant!, idx);
-          }
+          // Each update carries the voter's full current selection (empty = all unticked).
+          const idxs = (dec.selectedOptions ?? []).map((o) => poll.hashes.indexOf(Buffer.from(o).toString("hex")) + 1).filter((i) => i > 0);
+          const ids = (isGroup ? [m.key.participant, m.key.participantAlt] : [jid, m.key.remoteJidAlt]).filter(Boolean) as string[];
+          if (poll.onVote) { if (idxs.length) await poll.onVote(ids, idxs); }
+          else if (isGroup) await h.pollVote(jid, ids[0], idxs);
           return;
         } catch { /* wrong identity, try next */ }
       }

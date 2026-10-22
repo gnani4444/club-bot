@@ -19,5 +19,6 @@ export interface Sport {
   id: string;
   name: string;
   playersPerCourt: number;
+  sessionHours: number; // poll offers windows this long, e.g. 2 -> "1–3pm"
   venues: VenueAdapter[];
 }
