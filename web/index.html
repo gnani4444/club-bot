@@ -48,7 +48,7 @@
   .card h2 { font-size: 14px; margin: 0 0 14px; display: flex; justify-content: space-between; align-items: baseline; }
   .card h2 small { color: var(--muted); font-weight: 500; }
 
-  .bar { display: grid; grid-template-columns: 92px 1fr 40px; align-items: center; gap: 10px; margin: 8px 0; font-size: 14px; }
+  .bar { display: grid; grid-template-columns: minmax(92px, 34%) 1fr 40px; align-items: center; gap: 10px; margin: 8px 0; font-size: 14px; }
   .bar .t { font-weight: 600; white-space: nowrap; }
   .track { height: 28px; background: var(--bar); border-radius: 8px; overflow: hidden; position: relative; }
   .fill { height: 100%; background: color-mix(in srgb, var(--accent) 70%, var(--panel)); border-radius: 8px; transition: width .6s cubic-bezier(.2,.8,.2,1); }
@@ -181,9 +181,16 @@ function render() {
   const winIdx = sSlots.find((x) => s.start_at && Date.parse(x.payload.start) === Date.parse(s.start_at) && x.payload.venueName === s.venue_name)?.idx;
   const steps = ["🗳️ Voting", "📅 Booking", "💷 Paying", "✅ All set"];
 
-  const tally = sSlots.map((x) => ({ ...x, n: sVotes.filter((v) => v.idx === x.idx).length }));
+  const count = (x) => ({ ...x, n: sVotes.filter((v) => v.idx === x.idx).length });
+  const tally = sSlots.filter((x) => x.idx < 100).map(count);         // time poll
+  const vtally = sSlots.filter((x) => x.idx >= 100).map(count);       // venue poll
   const max = Math.max(1, ...tally.map((t) => t.n));
-  const voters = new Set(sVotes.map((v) => v.player_id)).size;
+  const vmax = Math.max(1, ...vtally.map((t) => t.n));
+  const voters = new Set(sVotes.filter((v) => v.idx < 100).map((v) => v.player_id)).size;
+  const bars = (list, top, label, sub) => list.map((t) => `
+          <div class="bar ${t.n === top && t.n > 0 ? "win" : ""}"><div class="t">${label(t)}</div>
+            <div class="track"><div class="fill" style="width:${(t.n / top) * 100}%"></div>${t.n ? "" : `<span>${esc(sub(t))}</span>`}</div>
+            <div class="n">${t.n}</div></div>`).join("");
   const share = s.court_price_pence && playing.length ? Math.ceil(s.court_price_pence / playing.length) : 0;
   const paidCount = playing.filter((r) => r.paid).length;
 
@@ -215,10 +222,9 @@ function render() {
           <ul class="people">${playing.map(person).join("") || `<li class="muted">Nobody yet</li>`}</ul>
           ${waiting.length ? `<h2 style="margin-top:18px">Waitlist <small>first reliable player gets the next spot</small></h2><ul class="people">${waiting.map(person).join("")}</ul>` : ""}
           ${out.length ? `<h2 style="margin-top:18px">Dropped out</h2><ul class="people">${out.map(person).join("")}</ul>` : ""}
-        ` : tally.map((t) => `
-          <div class="bar ${t.n === max && t.n > 0 ? "win" : ""}"><div class="t">${win(t.payload)}</div>
-            <div class="track"><div class="fill" style="width:${(t.n / max) * 100}%"></div>${t.n ? "" : `<span>${esc(t.payload.venueName)}</span>`}</div>
-            <div class="n">${t.n}</div></div>`).join("")}
+        ` : bars(tally, max, (t) => win(t.payload), (t) => `from ${gbp(t.payload.courtPricePence)}`)
+          + (vtally.length ? `<h2 style="margin-top:20px">📍 Where <small>venue poll</small></h2>`
+            + bars(vtally, vmax, (t) => esc(t.payload.venueName.split(" · ").pop()), (t) => t.payload.venueName.split(" · ")[0]) : "")}
       </div>
       <div class="side">
         ${s.venue_name ? `

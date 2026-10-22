@@ -17,6 +17,7 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
   let sock: WASocket;
   // Sent polls, kept to decrypt votes (Baileys rc14 no longer decrypts them itself).
   // shortcut: kept in memory, so taps on polls sent before a restart are ignored (typed replies still work).
+  const sentIds = new Set<string>(); // our own outgoing messages, so we never react to them
   const polls = new Map<string, { msg: WAMessage; hashes: string[]; onVote?: (ids: string[], idxs: number[]) => Promise<unknown> }>();
 
   // One outgoing message per second to stay under WhatsApp's spam radar.
@@ -30,15 +31,19 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
   const chat: Chat = {
     members: async (jid) => {
       const meta = await sock.groupMetadata(jid);
-      const me = await myIds();
+      // Includes the bot's own number: its phone can play too.
       const people = await Promise.all(meta.participants.map((p) => identities(p.id, (p as { phoneNumber?: string }).phoneNumber)));
-      return people.filter((ids) => !ids.some((i) => me.includes(i))).map((ids) => ids[0]);
+      return people.map((ids) => ids[0]);
     },
-    send: (jid, text, mentions) => enqueue(() => sock.sendMessage(jid, { text, mentions })),
+    send: (jid, text, mentions) => enqueue(async () => {
+      const msg = await sock.sendMessage(await reachable(jid), { text, mentions });
+      if (msg?.key.id) sentIds.add(msg.key.id);
+    }),
     poll: (jid, name, values, opts) =>
       enqueue(async () => {
         // selectableCount 0 = tick any number
-        const msg = await sock.sendMessage(jid, { poll: { name, values, selectableCount: opts?.single ? 1 : 0 } });
+        const msg = await sock.sendMessage(await reachable(jid), { poll: { name, values, selectableCount: opts?.single ? 1 : 0 } });
+        if (msg?.key.id) sentIds.add(msg.key.id);
         if (msg?.key.id) polls.set(msg.key.id, { msg, hashes: values.map((v) => createHash("sha256").update(v).digest("hex")), onVote: opts?.onVote });
       }),
   };
@@ -62,8 +67,10 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
       }
     });
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (type !== "notify") return;
       for (const m of messages) {
+        // Taps/messages from the bot's own phone may arrive as "append"; skip old history either way.
+        const recent = Date.now() / 1000 - Number(m.messageTimestamp ?? 0) < 120;
+        if (type !== "notify" && !(m.key.fromMe && recent)) continue;
         try { await route(m); } catch (e) { console.error("[handler]", e); }
       }
     });
@@ -86,14 +93,15 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
   const senderIds = (m: WAMessage) =>
     m.key.remoteJid!.endsWith("@g.us") ? identities(m.key.participant, m.key.participantAlt) : identities(m.key.remoteJid, m.key.remoteJidAlt);
   const myIds = () => identities(sock.user?.id, sock.user?.lid);
+  /** DMs to @lid addresses don't reliably arrive: send to the phone JID when we know it. */
+  const reachable = async (jid: string) => (jid.endsWith("@lid") ? (await identities(jid))[0] : jid);
 
   const route = async (m: WAMessage) => {
     const jid = m.key.remoteJid;
-    if (!jid || m.key.fromMe || !m.message) return;
+    if (!jid || !m.message || (m.key.id && sentIds.has(m.key.id))) return;
     const isGroup = jid.endsWith("@g.us");
-    const from = await senderIds(m);
-    const me = await myIds();
-    if (from.some((i) => me.includes(i))) return; // the bot's own phone: never a player
+    // The bot's own phone is a player too: its taps and messages arrive as fromMe.
+    const from = m.key.fromMe ? await myIds() : await senderIds(m);
 
     const vote = m.message.pollUpdateMessage;
     if (vote) {

@@ -1,6 +1,6 @@
 // Club workflow: commands from the WhatsApp group and replies in DMs. Transport-agnostic (see wa.ts).
 import { db, must } from "./db.js";
-import { searchSport, parseDay, windows } from "./search.js";
+import { searchSport, parseDay, windows, venueWindows } from "./search.js";
 import { sports } from "./sports/index.js";
 import type { Slot } from "./sports/types.js";
 import { winner, buildRoster, nextOnWaitlist, share, pounds, dueReminder, type Rsvp } from "./logic.js";
@@ -43,6 +43,9 @@ export const windowLabel = (s: Slot) => {
 };
 const MAX_POLL_OPTIONS = 12; // WhatsApp limit
 const AUTO_CLOSE_HOURS = 48;
+const VENUE_BASE = 100; // venue-poll options are stored as slots/votes idx 101, 102, ...
+const isTime = (idx: number) => idx < VENUE_BASE;
+const londonDate = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Europe/London" });
 const label = (s: Session) => `${sports[s.sport]?.name ?? s.sport} · ${s.venue_name} · ${s.start_at ? when(s.start_at) : "TBC"}`;
 const at = (jid: string) => `@${jid.split("@")[0]}`;
 
@@ -150,14 +153,7 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
     case "!pay": {
       const s = await openSession(groupJid, ["booked"]);
       if (!s) { await chat.send(groupJid, "No booked session."); return true; }
-      const playing = (await rsvps(s.id)).filter((r) => r.status === "in");
-      const each = share(s.court_price_pence ?? 0, playing.length);
-      const link = await paymentLink(label(s), each);
-      must(await db.from("sessions").update({ pay_link: link }).eq("id", s.id));
-      for (const r of playing) {
-        if (!r.paid) await chat.send(r.player_id, `${label(s)}\nYour share: ${pounds(each)}\nPay here: ${link}`);
-      }
-      await chat.send(groupJid, `${pounds(s.court_price_pence ?? 0)} ÷ ${playing.length} = ${pounds(each)} each. Links sent by DM.`);
+      await requestPayments(chat, s);
       return true;
     }
 
@@ -223,18 +219,28 @@ async function startPoll(chat: Chat, groupJid: string, sportArg: string | undefi
   const capacity = players > 0 ? players : sports[sport].playersPerCourt; // e.g. 2 for singles
   const autoClose = (closeAt ?? new Date(now.getTime() + AUTO_CLOSE_HOURS * 3600_000)).toISOString();
   const s = must(await db.from("sessions").insert({ sport, group_jid: groupJid, capacity, organiser, auto_close_at: autoClose }).select().single()) as Session;
-  must(await db.from("slots").insert(slots.map((p, i) => ({ session_id: s.id, idx: i + 1, payload: p }))));
+  // Second poll: venues. One option per venue that has at least one playable window that day.
+  const venues = [...new Map(venueWindows(await searchSport(sport, date), sports[sport].sessionHours).map((w) => [w.venueId, w])).values()].slice(0, MAX_POLL_OPTIONS);
+  must(await db.from("slots").insert([
+    ...slots.map((p, i) => ({ session_id: s.id, idx: i + 1, payload: p })),
+    ...venues.map((p, i) => ({ session_id: s.id, idx: VENUE_BASE + i + 1, payload: p })),
+  ]));
   const day = new Date(slots[0].start).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
   const closes = ` Closes ${when(autoClose)} or when everyone has voted.`;
   await chat.poll(groupJid, `${sports[sport].name} ${day}: pick every time you can play (or reply e.g. 1 3).${closes}`,
     slots.map((p) => `${windowLabel(p)} · from ${pounds(Math.ceil(p.courtPricePence / capacity))}pp`));
+  if (venues.length > 1) {
+    await chat.poll(groupJid, "📍 Where? Tick every venue you're happy with", venues.map((v) => v.venueName),
+      { onVote: (ids, idxs) => recordVotes(s.id, ids[0], idxs.map((i) => VENUE_BASE + i), "venue") });
+  }
 }
 
 /** Pick the winning window, build roster + waitlist, send the organiser the booking link. */
 async function closeVote(chat: Chat, groupJid: string, organiser: string) {
   const s = await openSession(groupJid, ["polling"]);
   if (!s || s.venue_name) { await chat.send(groupJid, "No vote running. Start one with !play <sport> [day]."); return; }
-  const votes = must(await db.from("votes").select("player_id, idx").eq("session_id", s.id).order("voted_at")) as { player_id: string; idx: number }[];
+  const allVotes = must(await db.from("votes").select("player_id, idx").eq("session_id", s.id).order("voted_at")) as { player_id: string; idx: number }[];
+  const votes = allVotes.filter((v) => isTime(v.idx));
   const win = winner(votes);
   if (!win) {
     const expired = s.auto_close_at && Date.parse(s.auto_close_at) <= Date.now();
@@ -242,7 +248,8 @@ async function closeVote(chat: Chat, groupJid: string, organiser: string) {
     await chat.send(groupJid, expired ? "Nobody voted, so no game this time. See you next week!" : "No votes yet.");
     return;
   }
-  const slot = (must(await db.from("slots").select("payload").eq("session_id", s.id).eq("idx", win).single()) as { payload: Slot }).payload;
+  const timeSlot = (must(await db.from("slots").select("payload").eq("session_id", s.id).eq("idx", win).single()) as { payload: Slot }).payload;
+  const slot = await pickVenue(s, timeSlot, allVotes.filter((v) => !isTime(v.idx)));
   // Players free for the winning window first (in vote order), then everyone else who voted, as waitlist.
   const voters = [...new Set([...votes.filter((v) => v.idx === win), ...votes].map((v) => v.player_id))];
   const roster = buildRoster(voters, s.capacity ?? 4);
@@ -261,6 +268,16 @@ async function closeVote(chat: Chat, groupJid: string, organiser: string) {
   await chat.send(who, msg);
   const names = (await rsvps(s.id)).filter((r) => r.status === "in").map((r) => r.players?.name ?? r.player_id);
   remember(`${label(done)} chosen by vote. Players: ${names.join(", ")}.`);
+}
+
+/** Among venues free for the winning time, take the most-voted one; no venue votes = cheapest. */
+async function pickVenue(s: Session, timeSlot: Slot, venueVotes: { idx: number }[]): Promise<Slot> {
+  const venueSlots = must(await db.from("slots").select("idx, payload").eq("session_id", s.id).gte("idx", VENUE_BASE)) as { idx: number; payload: Slot }[];
+  const score = (venueId: string) => venueVotes.filter((v) => venueSlots.find((x) => x.idx === v.idx)?.payload.venueId === venueId).length;
+  const options = venueWindows(await searchSport(s.sport, londonDate(timeSlot.start)), sports[s.sport]?.sessionHours ?? 1)
+    .filter((w) => w.start === timeSlot.start && w.end === timeSlot.end);
+  options.sort((a, b) => score(b.venueId) - score(a.venueId) || a.courtPricePence - b.courtPricePence);
+  return options[0] ?? timeSlot;
 }
 
 /** Weekly schedules: post due polls, auto-close expired ones. */
@@ -284,13 +301,38 @@ async function markBooked(chat: Chat, groupJid: string) {
   if (!s?.venue_name) { await chat.send(groupJid, "Nothing to book. Run !close first."); return; }
   must(await db.from("sessions").update({ status: "booked" }).eq("id", s.id));
   await postRoster(chat, { ...s, status: "booked" }, "✅ Court booked!");
+  await requestPayments(chat, { ...s, status: "booked" });
 }
 
-export async function recordVotes(sessionId: number, playerId: string, idxs: number[]) {
+/** Split the court fee and DM every unpaid player their share, a link and an "I've paid" button. */
+async function requestPayments(chat: Chat, s: Session) {
+  const playing = (await rsvps(s.id)).filter((r) => r.status === "in");
+  if (!playing.length) return;
+  const each = share(s.court_price_pence ?? 0, playing.length);
+  const link = await paymentLink(label(s), each);
+  must(await db.from("sessions").update({ pay_link: link }).eq("id", s.id));
+  for (const r of playing.filter((r) => !r.paid)) await askToPay(chat, s, r.player_id, each, link);
+  await chat.send(s.group_jid, `💷 ${pounds(s.court_price_pence ?? 0)} ÷ ${playing.length} = ${pounds(each)} each. Payment links sent privately.`);
+}
+
+async function askToPay(chat: Chat, s: Session, playerId: string, each: number, link: string) {
+  await chat.send(playerId, `💷 ${label(s)}\nYour share: ${pounds(each)}\nPay here: ${link}`);
+  await chat.poll(playerId, "Tap once you've paid", ["✅ I've paid"], { single: true, onVote: async (_ids, idxs) => {
+    if (!idxs.includes(1)) return;
+    must(await db.from("rsvps").update({ paid: true }).match({ session_id: s.id, player_id: playerId }));
+    await chat.send(playerId, "Thanks, payment noted ✅");
+    await postRoster(chat, s, `💷 ${at(playerId)} paid.`);
+  } });
+}
+
+export async function recordVotes(sessionId: number, playerId: string, idxs: number[], kind: "time" | "venue" = "time") {
   await upsertPlayer(playerId);
-  const valid = (must(await db.from("slots").select("idx").eq("session_id", sessionId)) as { idx: number }[]).map((r) => r.idx);
+  const inPoll = (i: number) => (kind === "time" ? isTime(i) : !isTime(i));
+  const valid = (must(await db.from("slots").select("idx").eq("session_id", sessionId)) as { idx: number }[]).map((r) => r.idx).filter(inPoll);
   const picks = [...new Set(idxs)].filter((i) => valid.includes(i));
-  must(await db.from("votes").delete().match({ session_id: sessionId, player_id: playerId }));
+  // Replace this player's choices in this poll only.
+  const del = db.from("votes").delete().match({ session_id: sessionId, player_id: playerId });
+  must(await (kind === "time" ? del.lt("idx", VENUE_BASE) : del.gte("idx", VENUE_BASE)));
   const now = new Date().toISOString();
   // upsert: one poll tap can arrive as two updates at once
   if (picks.length) must(await db.from("votes").upsert(picks.map((idx) => ({ session_id: sessionId, player_id: playerId, idx, voted_at: now })), { ignoreDuplicates: true }));
@@ -307,7 +349,7 @@ export async function onPollVote(chat: Chat, groupJid: string, ids: string[], id
   }
   // Vote already closed: a confirmed player unticking the winning time = dropping out.
   const slots = must(await db.from("slots").select("idx, payload").eq("session_id", s.id)) as { idx: number; payload: Slot }[];
-  const win = slots.find((x) => Date.parse(x.payload.start) === Date.parse(s.start_at ?? "") && x.payload.venueName === s.venue_name)?.idx;
+  const win = slots.find((x) => isTime(x.idx) && Date.parse(x.payload.start) === Date.parse(s.start_at ?? ""))?.idx;
   const playing = (await rsvps(s.id)).some((r) => r.status === "in" && ids.includes(r.player_id));
   if (win && playing && !idxs.includes(win)) await onDm(chat, ids, "OUT");
 }
@@ -316,7 +358,7 @@ export async function onPollVote(chat: Chat, groupJid: string, ids: string[], id
 async function closeIfEveryoneVoted(chat: Chat, s: Session) {
   let members: string[];
   try { members = await chat.members(s.group_jid); } catch { return; }
-  const voted = new Set((must(await db.from("votes").select("player_id").eq("session_id", s.id)) as { player_id: string }[]).map((v) => v.player_id));
+  const voted = new Set((must(await db.from("votes").select("player_id").eq("session_id", s.id).lt("idx", VENUE_BASE)) as { player_id: string }[]).map((v) => v.player_id));
   if (members.length && members.every((m) => voted.has(m))) {
     await chat.send(s.group_jid, "Everyone has voted, closing the poll.");
     await closeVote(chat, s.group_jid, s.organiser ?? s.group_jid);
@@ -354,6 +396,10 @@ export async function onDm(chat: Chat, ids: string[], text: string): Promise<boo
     must(await db.from("rsvps").update({ status: "in", offered_at: null }).match(key));
     await chat.send(r.player_id, `You're in! ${label(s)}\n${s.maps_url ?? ""}`);
     await postRoster(chat, s, `🎉 ${at(r.player_id)} takes the spot.`);
+    if (s.pay_link) {
+      const n = (await rsvps(s.id)).filter((x) => x.status === "in").length;
+      await askToPay(chat, s, r.player_id, share(s.court_price_pence ?? 0, n), s.pay_link);
+    }
   } else if (r.status === "in") {
     await chat.send(r.player_id, "👍 You're in. See you there!");
   } else {
