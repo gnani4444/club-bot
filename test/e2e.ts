@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 try { process.loadEnvFile(".env"); } catch { /* shell env */ }
 process.env.OFFER_TIMEOUT_SEC = "1";
 
-const { onGroup, onDm, onPollVote, tick } = await import("../src/club.js");
+const { onGroup, onDm, onPollVote, tick, runSchedules } = await import("../src/club.js");
 const { db } = await import("../src/db.js");
 
 const G = "e2e-test@g.us";
@@ -72,9 +72,26 @@ try {
   await g(org, "!done"); assert.match(last(G), /Session closed/);
   await tick(chat);
 
+  step("weekly: auto-post Monday 10:00, auto-close after 48h");
+  await g(org, "!weekly"); assert.match(last(G), /No weekly poll/);
+  await g(org, "!weekly badminton sat 2"); assert.match(last(G), /every Monday 10:00/);
+  await runSchedules(chat, new Date("2026-10-26T09:30:00Z")); // Mon 09:30 London: too early
+  assert.match(last(G), /every Monday/);
+  await runSchedules(chat, new Date("2026-10-26T10:30:00Z")); // Mon 10:30 London: posts
+  assert.match(last(G), /\[POLL\] Badminton Sat 31 Oct.*Closes/); console.log(last(G).split("\n")[0]);
+  const polls = sent.length;
+  await runSchedules(chat, new Date("2026-10-26T11:30:00Z")); // same day: no double post
+  assert.equal(sent.length, polls);
+  await g(a, "1 2"); await g(b, "2");
+  await runSchedules(chat, new Date(Date.now() + 49 * 3600_000)); // past auto-close
+  assert.match(last(org), /\[POLL\] Tap once the court is booked/);
+  assert.match([...sent].reverse().find((m) => m.to === G)!.text, /wins \(2 free\)/);
+  await g(org, "!weekly off"); assert.match(last(G), /stopped/);
+
   console.log(`\nALL E2E STEPS PASSED (${sent.length} messages)`);
 } finally {
   await db.from("sessions").delete().eq("group_jid", G);
+  await db.from("schedules").delete().eq("group_jid", G);
   await db.from("votes").delete().like("player_id", "e2e-%");
   await db.from("rsvps").delete().like("player_id", "e2e-%");
   await db.from("players").delete().like("id", "e2e-%");
