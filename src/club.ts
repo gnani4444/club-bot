@@ -127,7 +127,8 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
       const done = { ...s, ...upd };
       await postRoster(chat, done, `Option ${win} wins. Booking now.`);
       await chat.send(sender, `Book it here (one tap): ${slot.bookingUrl}\nThen send !booked in the group.`);
-      remember(`${label(done)} chosen by vote. Players: ${roster.filter((r) => r.status === "in").map((r) => r.player_id).join(", ")}.`);
+      const names = (await rsvps(s.id)).filter((r) => r.status === "in").map((r) => r.players?.name ?? r.player_id);
+      remember(`${label(done)} chosen by vote. Players: ${names.join(", ")}.`);
       return true;
     }
 

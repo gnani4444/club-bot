@@ -11,6 +11,7 @@
     "start": "tsx src/index.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "e2e": "tsx test/e2e.ts",
     "search": "tsx src/cli-search.ts"
   },
   "dependencies": {
