@@ -30,7 +30,7 @@ Waitlist order puts people who rarely drop out first. Unanswered offers expire a
 1. Create a Supabase project and run `supabase/schema.sql` in the SQL editor.
 2. `cp .env.example .env` and fill `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`.
 3. `npm install && npm start`
-4. Scan the QR with WhatsApp on a **spare number** (Linked devices). Add that number to your group.
+4. Scan the QR with WhatsApp on a **spare number** (Linked devices). Set `WHATSAPP_INVITE` to your group link and the bot joins it, or add the number to the group by hand.
 5. Dashboard: http://localhost:3000
 
 > Baileys is an unofficial WhatsApp client. WhatsApp can ban numbers that behave like bots: use a spare number.

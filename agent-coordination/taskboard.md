@@ -8,7 +8,7 @@ read its plan and activity log, then take over the **same task**.
 
 | Status | Task | Created by | Current executor | Last agent | Scope | Last activity | Next action | Plan | Log |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| planned | Build club bot T0-T7 | claude-code | claude-code | claude-code | `package.json src/ web/ supabase/ fixtures/ test/ README.md .env.example` | 2026-10-22T19:19:59Z | Complete the linked plan before changing task-scoped files. | [plan](tasks/20261022T191959Z-claude-code-build-club-bot-t0-t7-29892/plan.md) | [activity](tasks/20261022T191959Z-claude-code-build-club-bot-t0-t7-29892/activity.md) |
+| in-progress | Build club bot T0-T7 | claude-code | claude-code | claude-code | `package.json src/ web/ supabase/ fixtures/ test/ README.md .env.example` | 2026-10-22T19:24:59Z | User sets .env, runs schema, scans QR | [plan](tasks/20261022T191959Z-claude-code-build-club-bot-t0-t7-29892/plan.md) | [activity](tasks/20261022T191959Z-claude-code-build-club-bot-t0-t7-29892/activity.md) |
 | completed | Spec + plan for multi-sport club bot | claude-code | unassigned | claude-code | `docs/ HACKATHON.md LICENSE AGENTS.md` | 2026-10-22T19:16:27Z | No further action; task completed. | [plan](tasks/20261022T191306Z-claude-code-spec-plan-for-multi-sport-club-bot-25792/plan.md) | [activity](tasks/20261022T191306Z-claude-code-spec-plan-for-multi-sport-club-bot-25792/activity.md) |
 
 ## Failover rule

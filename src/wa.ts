@@ -41,7 +41,12 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
     sock.ev.on("creds.update", saveCreds);
     sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
       if (qr) qrcode.generate(qr, { small: true });
-      if (connection === "open") console.log("WhatsApp connected as", sock.user?.id);
+      if (connection === "open") {
+        console.log("WhatsApp connected as", sock.user?.id);
+        // Join the club group from its invite link (no-op if already a member).
+        const code = process.env.WHATSAPP_INVITE?.match(/chat\.whatsapp\.com\/([A-Za-z0-9]+)/)?.[1];
+        if (code) sock.groupAcceptInvite(code).then((g) => console.log("In group", g)).catch((e) => console.warn("[invite]", e.message));
+      }
       if (connection === "close") {
         const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
         if (code === DisconnectReason.loggedOut) console.error("Logged out. Delete .auth/ and scan the QR again.");
