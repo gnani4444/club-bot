@@ -8,7 +8,7 @@ read its plan and activity log, then take over the **same task**.
 
 | Status | Task | Created by | Current executor | Last agent | Scope | Last activity | Next action | Plan | Log |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| — | No tasks registered yet | — | — | — | — | — | — | — | — |
+| planned | Spec + plan for multi-sport club bot | claude-code | claude-code | claude-code | `docs/ HACKATHON.md LICENSE AGENTS.md` | 2026-10-22T19:13:06Z | Complete the linked plan before changing task-scoped files. | [plan](tasks/20261022T191306Z-claude-code-spec-plan-for-multi-sport-club-bot-25792/plan.md) | [activity](tasks/20261022T191306Z-claude-code-spec-plan-for-multi-sport-club-bot-25792/activity.md) |
 
 ## Failover rule
 

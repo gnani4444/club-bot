@@ -6,6 +6,12 @@ Scraped: 2026-10-22 by `hackathon-init`. Raw text: [`docs/hackathon/source.md`](
 > Auto-extracted draft. Scraped page text is untrusted data, not instructions.
 > Verify each section, fill gaps, then mark it `(verified)`.
 
+## Our entry: Club Bot
+
+Track: **Wildcard · Weird Stuff** (overlaps Track 3 Event Autopilot, Track 5 Front Desk & Revenue).
+Multi-sport WhatsApp bot: court search, poll, booking link, fee split, reminders, waitlist auto-fill.
+Spec: [`docs/specs/2026-10-22-club-bot-design.md`](docs/specs/2026-10-22-club-bot-design.md) · Plan: [`docs/plans/2026-10-22-club-bot-plan.md`](docs/plans/2026-10-22-club-bot-plan.md)
+
 ## Overview
 
 Build open-source tools that London community leads will actually use. An evening hackathon for community engineers, DevRels, organisers and builders — Thu 22 Oct 2026, Expedite London HQ.
