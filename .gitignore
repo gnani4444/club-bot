@@ -1,14 +1,15 @@
-node_modules/
-dist/
-build/
-.next/
+
+!.env.example
+# Taskboard runtime state (per machine, never committed)
+*.log
+.DS_Store
+.auth/
 .env
 .env.*
-!.env.example
-.DS_Store
-*.log
-
-# Taskboard runtime state (per machine, never committed)
-agent-coordination/active/
-agent-coordination/.write-lock/
+.next/
 agent-coordination/.taskboard.*
+agent-coordination/.write-lock/
+agent-coordination/active/
+build/
+dist/
+node_modules/

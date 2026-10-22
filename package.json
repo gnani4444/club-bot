@@ -1,0 +1,29 @@
+{
+  "name": "club-bot",
+  "version": "0.1.0",
+  "description": "WhatsApp bot that runs recurring sports sessions: court search, vote, booking, fees, reminders, waitlist auto-fill.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "search": "tsx src/cli-search.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "^9.4.0",
+    "qrcode-terminal": "^0.12.0",
+    "stripe": "^17.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

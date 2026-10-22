@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Club Bot</title>
+<style>
+  :root { --bg:#f6f7f4; --card:#fff; --ink:#1b1f1a; --muted:#6b7266; --in:#1f7a3f; --wait:#b26b00; --out:#a33; --line:#e3e6df; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121411; --card:#1b1e1a; --ink:#eef0ea; --muted:#9aa294; --line:#2b2f29; --in:#5cc282; --wait:#e0a040; --out:#e57373; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.4 system-ui, sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; } .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:17px; margin:0 0 4px; } .meta { color:var(--muted); font-size:14px; margin-bottom:12px; }
+  ul { list-style:none; padding:0; margin:0; } li { display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--line); }
+  .in { color:var(--in); } .waitlist, .offered { color:var(--wait); } .out { color:var(--out); text-decoration:line-through; }
+  .empty { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Club Bot</h1>
+  <p class="sub">Live roster · updates as players vote, drop out and pay</p>
+  <div id="app" class="empty">Loading…</div>
+</main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const when = (iso) => iso ? new Date(iso).toLocaleString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "vote in progress";
+async function render() {
+  const { sessions, rsvps } = await (await fetch("/api/state")).json();
+  const app = document.getElementById("app");
+  if (!sessions.length) { app.innerHTML = "No open sessions. Send !play badminton sat in the group."; return; }
+  app.className = "";
+  app.innerHTML = sessions.map((s) => {
+    const rows = rsvps.filter((r) => r.session_id === s.id);
+    const playing = rows.filter((r) => r.status === "in").length;
+    return `<section class="card">
+      <h2>${esc(s.sport)} · ${esc(s.venue_name ?? "")}</h2>
+      <div class="meta">${esc(when(s.start_at))} · ${esc(s.status)} · ${playing}/${esc(s.capacity)} playing${s.court_price_pence ? ` · £${(s.court_price_pence / 100).toFixed(2)}` : ""}</div>
+      <ul>${rows.map((r) => `<li><span class="${esc(r.status)}">${esc(r.players?.name ?? "player")}</span><span>${esc(r.status)}${r.status === "in" ? (r.paid ? " · paid ✅" : " · unpaid") : ""}</span></li>`).join("") || '<li class="empty">No roster yet</li>'}</ul>
+    </section>`;
+  }).join("");
+}
+render();
+new EventSource("/events").onmessage = render;
+setInterval(render, 10000);
+</script>
+</body>
+</html>
