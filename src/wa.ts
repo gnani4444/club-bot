@@ -8,7 +8,7 @@ import type { Chat } from "./club.js";
 export interface Handlers {
   group(chat: Chat, groupJid: string, sender: string, name: string | null, text: string, mentions: string[]): Promise<unknown>;
   dm(chat: Chat, ids: string[], text: string): Promise<unknown>;
-  pollVote(groupJid: string, voter: string, idxs: number[]): Promise<unknown>;
+  pollVote(chat: Chat, groupJid: string, voter: string, idxs: number[]): Promise<unknown>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -28,6 +28,11 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
   };
 
   const chat: Chat = {
+    members: async (jid) => {
+      const meta = await sock.groupMetadata(jid);
+      const me = [sock.user?.id, sock.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j!));
+      return meta.participants.map((p) => jidNormalizedUser(p.id)).filter((j) => !me.includes(j));
+    },
     send: (jid, text, mentions) => enqueue(() => sock.sendMessage(jid, { text, mentions })),
     poll: (jid, name, values, opts) =>
       enqueue(async () => {
@@ -66,8 +71,10 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
   /** Sender's JIDs without device suffix: primary first (group: participant, DM: chat), then the phone/@lid alternative. */
   const senderIds = (m: WAMessage) => {
     const group = m.key.remoteJid!.endsWith("@g.us");
+    // Phone JID first: DMs to @lid addresses don't reliably arrive.
     return (group ? [m.key.participant, m.key.participantAlt] : [m.key.remoteJid, m.key.remoteJidAlt])
-      .filter(Boolean).map((j) => jidNormalizedUser(j!));
+      .filter(Boolean).map((j) => jidNormalizedUser(j!))
+      .sort((a, b) => Number(b.endsWith("@s.whatsapp.net")) - Number(a.endsWith("@s.whatsapp.net")));
   };
 
   const route = async (m: WAMessage) => {
@@ -93,7 +100,7 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
           } catch { continue; /* wrong pairing */ }
           const ids = senderIds(m);
           if (poll.onVote) { if (idxs.length) await poll.onVote(ids, idxs); }
-          else if (isGroup) await h.pollVote(jid, ids[0], idxs);
+          else if (isGroup) await h.pollVote(chat, jid, ids[0], idxs);
           return;
         }
       }

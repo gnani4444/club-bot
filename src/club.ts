@@ -7,6 +7,8 @@ import { winner, buildRoster, nextOnWaitlist, share, pounds, dueReminder, type R
 import { paymentLink, remember, ask, notionLog } from "./sponsors.js";
 
 export interface Chat {
+  /** Group members' JIDs, excluding the bot. */
+  members(groupJid: string): Promise<string[]>;
   send(jid: string, text: string, mentions?: string[]): Promise<void>;
   /** Tappable poll. With onVote, taps go to that callback (voter's JIDs, chosen 1-based options). */
   poll(jid: string, name: string, options: string[], opts?: { single?: boolean; onVote?: (ids: string[], idxs: number[]) => Promise<unknown> }): Promise<void>;
@@ -40,6 +42,7 @@ export const windowLabel = (s: Slot) => {
   return a.ap === b.ap ? `${a.t}–${b.t}${b.ap}` : `${a.t}${a.ap}–${b.t}${b.ap}`;
 };
 const MAX_POLL_OPTIONS = 12; // WhatsApp limit
+const AUTO_CLOSE_HOURS = 48;
 const label = (s: Session) => `${sports[s.sport]?.name ?? s.sport} · ${s.venue_name} · ${s.start_at ? when(s.start_at) : "TBC"}`;
 const at = (jid: string) => `@${jid.split("@")[0]}`;
 
@@ -100,7 +103,10 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
 
   if (numbers) {
     const s = await openSession(groupJid, ["polling"]);
-    if (s && !s.venue_name) await recordVotes(s.id, sender, t.split(/[\s,]+/).map(Number));
+    if (s && !s.venue_name) {
+      await recordVotes(s.id, sender, t.split(/[\s,]+/).map(Number));
+      await closeIfEveryoneVoted(chat, s);
+    }
     return !!s;
   }
 
@@ -215,11 +221,11 @@ async function startPoll(chat: Chat, groupJid: string, sportArg: string | undefi
   }
   if (!slots.length) { await chat.send(groupJid, `No ${sport} courts free on ${date}.`); return; }
   const capacity = players > 0 ? players : sports[sport].playersPerCourt; // e.g. 2 for singles
-  const autoClose = closeAt?.toISOString() ?? null;
+  const autoClose = (closeAt ?? new Date(now.getTime() + AUTO_CLOSE_HOURS * 3600_000)).toISOString();
   const s = must(await db.from("sessions").insert({ sport, group_jid: groupJid, capacity, organiser, auto_close_at: autoClose }).select().single()) as Session;
   must(await db.from("slots").insert(slots.map((p, i) => ({ session_id: s.id, idx: i + 1, payload: p }))));
   const day = new Date(slots[0].start).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
-  const closes = autoClose ? ` Closes ${when(autoClose)}.` : "";
+  const closes = ` Closes ${when(autoClose)} or when everyone has voted.`;
   await chat.poll(groupJid, `${sports[sport].name} ${day}: pick every time you can play (or reply e.g. 1 3).${closes}`,
     slots.map((p) => `${windowLabel(p)} · from ${pounds(Math.ceil(p.courtPricePence / capacity))}pp`));
 }
@@ -231,8 +237,9 @@ async function closeVote(chat: Chat, groupJid: string, organiser: string) {
   const votes = must(await db.from("votes").select("player_id, idx").eq("session_id", s.id).order("voted_at")) as { player_id: string; idx: number }[];
   const win = winner(votes);
   if (!win) {
-    if (s.auto_close_at) must(await db.from("sessions").update({ status: "done" }).eq("id", s.id));
-    await chat.send(groupJid, s.auto_close_at ? "Nobody voted this week, so no game. See you next week!" : "No votes yet.");
+    const expired = s.auto_close_at && Date.parse(s.auto_close_at) <= Date.now();
+    if (expired) must(await db.from("sessions").update({ status: "done" }).eq("id", s.id));
+    await chat.send(groupJid, expired ? "Nobody voted, so no game this time. See you next week!" : "No votes yet.");
     return;
   }
   const slot = (must(await db.from("slots").select("payload").eq("session_id", s.id).eq("idx", win).single()) as { payload: Slot }).payload;
@@ -247,8 +254,11 @@ async function closeVote(chat: Chat, groupJid: string, organiser: string) {
   must(await db.from("rsvps").upsert(roster.map((r) => ({ ...r, session_id: s.id }))));
   const done = { ...s, ...upd };
   await postRoster(chat, done, `${windowLabel(slot)} wins (${votes.filter((v) => v.idx === win).length} free). Booking now.`);
-  await chat.send(organiser, `Book ${label(done)} here: ${slot.bookingUrl}`);
-  await chat.poll(organiser, "Tap once the court is booked", ["✅ Booked it"], { single: true, onVote: (_ids, idxs) => idxs.includes(1) ? markBooked(chat, groupJid) : Promise.resolve() });
+  const who = s.organiser ?? organiser;
+  const msg = `📅 Book ${label(done)} here:\n${slot.bookingUrl}`;
+  await chat.send(groupJid, `${msg}\n\n${at(who)} tap ✅ below once it's booked.`, [who]);
+  await chat.poll(groupJid, "Court booked?", ["✅ Booked it"], { single: true, onVote: (ids, idxs) => idxs.includes(1) && ids.includes(who) ? markBooked(chat, groupJid) : Promise.resolve() });
+  await chat.send(who, msg);
   const names = (await rsvps(s.id)).filter((r) => r.status === "in").map((r) => r.players?.name ?? r.player_id);
   remember(`${label(done)} chosen by vote. Players: ${names.join(", ")}.`);
 }
@@ -282,13 +292,27 @@ export async function recordVotes(sessionId: number, playerId: string, idxs: num
   const picks = [...new Set(idxs)].filter((i) => valid.includes(i));
   must(await db.from("votes").delete().match({ session_id: sessionId, player_id: playerId }));
   const now = new Date().toISOString();
-  if (picks.length) must(await db.from("votes").insert(picks.map((idx) => ({ session_id: sessionId, player_id: playerId, idx, voted_at: now }))));
+  // upsert: one poll tap can arrive as two updates at once
+  if (picks.length) must(await db.from("votes").upsert(picks.map((idx) => ({ session_id: sessionId, player_id: playerId, idx, voted_at: now })), { ignoreDuplicates: true }));
 }
 
 /** Poll vote from WhatsApp poll UI (full current selection): newest polling session in the group. */
-export async function onPollVote(groupJid: string, voter: string, idxs: number[]) {
+export async function onPollVote(chat: Chat, groupJid: string, voter: string, idxs: number[]) {
   const s = await openSession(groupJid, ["polling"]);
-  if (s && !s.venue_name) await recordVotes(s.id, voter, idxs);
+  if (!s || s.venue_name) return;
+  await recordVotes(s.id, voter, idxs);
+  await closeIfEveryoneVoted(chat, s);
+}
+
+/** Close the vote early once every group member has voted. */
+async function closeIfEveryoneVoted(chat: Chat, s: Session) {
+  let members: string[];
+  try { members = await chat.members(s.group_jid); } catch { return; }
+  const voted = new Set((must(await db.from("votes").select("player_id").eq("session_id", s.id)) as { player_id: string }[]).map((v) => v.player_id));
+  if (members.length && members.every((m) => voted.has(m))) {
+    await chat.send(s.group_jid, "Everyone has voted, closing the poll.");
+    await closeVote(chat, s.group_jid, s.organiser ?? s.group_jid);
+  }
 }
 
 /** Direct message. `ids` = every JID WhatsApp gave for the sender (phone JID and/or @lid). */

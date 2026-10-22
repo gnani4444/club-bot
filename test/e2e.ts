@@ -11,12 +11,16 @@ const G = "e2e-test@g.us";
 const [org, a, b, c, d, e] = ["org", "a", "b", "c", "d", "e"].map((x) => `e2e-${x}@s.whatsapp.net`);
 type OnVote = (ids: string[], idxs: number[]) => Promise<unknown>;
 const sent: { to: string; text: string; onVote?: OnVote }[] = [];
+let members = [org, a, b, c, d, e];
 const chat = {
+  async members() { return members; },
   async send(to: string, text: string) { sent.push({ to, text }); },
   async poll(to: string, name: string, options: string[], opts?: { onVote?: OnVote }) { sent.push({ to, text: `[POLL] ${name}\n${options.join("\n")}`, onVote: opts?.onVote }); },
 };
 /** Simulate tapping option(s) on the newest poll sent to `who`. */
 const tap = (who: string, ...idxs: number[]) => [...sent].reverse().find((m) => m.to === who && m.onVote)!.onVote!([who], idxs);
+/** Simulate `who` tapping the newest group poll that has a callback. */
+const tapGroup = (who: string, ...idxs: number[]) => [...sent].reverse().find((m) => m.to === G && m.onVote)!.onVote!([who], idxs);
 const last = (to: string) => [...sent].reverse().find((m) => m.to === to)?.text ?? "";
 const step = (name: string) => console.log(`\n=== ${name} ===`);
 const g = (who: string, text: string, mentions: string[] = []) => onGroup(chat, G, who, who.split("@")[0], text, mentions);
@@ -33,13 +37,14 @@ try {
 
   step("votes: numbers + poll vote, re-vote overrides");
   await g(a, "2 3"); await g(b, "2"); await g(c, "1"); await g(d, "2, 5, 99"); // multi-choice; 99 ignored
-  await onPollVote(G, e, [2]); await g(c, "2"); // c changes mind (replaces "1")
+  await onPollVote(chat, G, e, [2]); await g(c, "2"); // c changes mind (replaces "1")
   await g(org, "!close");
-  console.log(last(G)); assert.match(last(G), /11am–1pm wins \(5 free\)/);
-  assert.match(last(org), /\[POLL\] Tap once the court is booked/);
+  assert.ok(sent.some((m) => m.to === G && /11am–1pm wins \(5 free\)/.test(m.text)));
+  assert.match(last(G), /\[POLL\] Court booked\?/); assert.match(last(org), /Book .* here/);
 
-  step("booked (organiser taps the poll)");
-  await tap(org, 1); assert.match(last(G), /Court booked/); console.log(last(G));
+  step("booked: only the organiser's tap counts");
+  await tapGroup(a, 1); assert.match(last(G), /\[POLL\] Court booked\?/);
+  await tapGroup(org, 1); assert.match(last(G), /Court booked!/); console.log(last(G));
   await g(org, "1"); // votes after close are ignored
 
   step("pay + paid");
@@ -82,11 +87,19 @@ try {
   const polls = sent.length;
   await runSchedules(chat, new Date("2026-10-26T11:30:00Z")); // same day: no double post
   assert.equal(sent.length, polls);
-  await g(a, "1 2"); await g(b, "2");
+  await g(a, "1 2"); await g(b, "2"); // c never votes, so no early close
   await runSchedules(chat, new Date("2026-10-28T11:00:00Z")); // Wed, past 48h auto-close
-  assert.match(last(org), /\[POLL\] Tap once the court is booked/);
-  assert.match([...sent].reverse().find((m) => m.to === G)!.text, /wins \(2 free\)/);
+  assert.match(last(G), /\[POLL\] Court booked\?/);
+  assert.ok(sent.some((m) => m.to === G && /wins \(2 free\)/.test(m.text)));
   await g(org, "!weekly off"); assert.match(last(G), /stopped/);
+
+  step("poll closes as soon as every member has voted");
+  members = [a, b];
+  await g(org, "!play tennis sat 2"); assert.match(last(G), /or when everyone has voted/);
+  await g(a, "1"); assert.match(last(G), /\[POLL\] Tennis/); // b hasn't voted
+  await onPollVote(chat, G, b, [1]);
+  assert.ok(sent.some((m) => m.to === G && /Everyone has voted/.test(m.text)));
+  assert.match(last(G), /\[POLL\] Court booked\?/);
 
   console.log(`\nALL E2E STEPS PASSED (${sent.length} messages)`);
 } finally {
