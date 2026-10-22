@@ -150,7 +150,9 @@ function stage(s, rows) {
 
 function render() {
   if (!state) return;
-  const { sessions, rsvps, slots, votes, schedules, recent } = state;
+  const { rsvps, slots, votes, schedules, recent } = state;
+  // Hide votes started before auto-close existed: nothing will ever close them.
+  const sessions = state.sessions.filter((s) => s.venue_name || s.auto_close_at);
   const app = $("#app");
   const sch = schedules[0];
   if (!sessions.length) {
@@ -261,7 +263,7 @@ async function load() {
 }
 
 setInterval(() => {
-  const s = state?.sessions?.find((x) => x.id === selected);
+  const s = state?.sessions?.find((x) => x.id === selected && (x.venue_name || x.auto_close_at));
   if (!s) return;
   const cd = countdown(s);
   if ($("#cd")) { $("#cd").textContent = cd.num; $("#cdl").textContent = cd.lbl; }
