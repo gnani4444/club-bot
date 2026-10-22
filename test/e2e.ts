@@ -83,7 +83,7 @@ try {
   await runSchedules(chat, new Date("2026-10-26T11:30:00Z")); // same day: no double post
   assert.equal(sent.length, polls);
   await g(a, "1 2"); await g(b, "2");
-  await runSchedules(chat, new Date(Date.now() + 49 * 3600_000)); // past auto-close
+  await runSchedules(chat, new Date("2026-10-28T11:00:00Z")); // Wed, past 48h auto-close
   assert.match(last(org), /\[POLL\] Tap once the court is booked/);
   assert.match([...sent].reverse().find((m) => m.to === G)!.text, /wins \(2 free\)/);
   await g(org, "!weekly off"); assert.match(last(G), /stopped/);

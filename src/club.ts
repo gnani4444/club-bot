@@ -203,11 +203,11 @@ const scheduleText = (s: Schedule) =>
   `Weekly ${sports[s.sport]?.name ?? s.sport} poll for ${s.play_day} every ${DOW[s.post_dow]} ${s.post_hour}:00, closes after ${s.close_after_hours}h. Stop with !weekly off`;
 
 /** Post the time-window poll for a sport and day. */
-async function startPoll(chat: Chat, groupJid: string, sportArg: string | undefined, dayArg: string | undefined, players: number, organiser: string, closeAfterHours?: number) {
+async function startPoll(chat: Chat, groupJid: string, sportArg: string | undefined, dayArg: string | undefined, players: number, organiser: string, closeAt?: Date, now = new Date()) {
   const sport = (sportArg ?? "").toLowerCase();
   let date: string, slots: Slot[];
   try {
-    date = parseDay(dayArg);
+    date = parseDay(dayArg, now);
     slots = windows(await searchSport(sport, date), sports[sport]?.sessionHours ?? 1).slice(0, MAX_POLL_OPTIONS);
   } catch (e) {
     await chat.send(groupJid, (e as Error).message);
@@ -215,7 +215,7 @@ async function startPoll(chat: Chat, groupJid: string, sportArg: string | undefi
   }
   if (!slots.length) { await chat.send(groupJid, `No ${sport} courts free on ${date}.`); return; }
   const capacity = players > 0 ? players : sports[sport].playersPerCourt; // e.g. 2 for singles
-  const autoClose = closeAfterHours ? new Date(Date.now() + closeAfterHours * 3600_000).toISOString() : null;
+  const autoClose = closeAt?.toISOString() ?? null;
   const s = must(await db.from("sessions").insert({ sport, group_jid: groupJid, capacity, organiser, auto_close_at: autoClose }).select().single()) as Session;
   must(await db.from("slots").insert(slots.map((p, i) => ({ session_id: s.id, idx: i + 1, payload: p }))));
   const day = new Date(slots[0].start).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
@@ -262,7 +262,7 @@ async function runSchedules(chat: Chat, now: Date) {
   for (const sch of must(await db.from("schedules").select("*")) as Schedule[]) {
     if (sch.post_dow === dow && Number(parts.hour) >= sch.post_hour && sch.last_posted !== today) {
       must(await db.from("schedules").update({ last_posted: today }).eq("group_jid", sch.group_jid));
-      await startPoll(chat, sch.group_jid, sch.sport, sch.play_day, sch.players ?? 0, sch.organiser, sch.close_after_hours);
+      await startPoll(chat, sch.group_jid, sch.sport, sch.play_day, sch.players ?? 0, sch.organiser, new Date(now.getTime() + sch.close_after_hours * 3600_000), now);
     }
   }
   const due = must(await db.from("sessions").select("*").eq("status", "polling").is("venue_name", null).lte("auto_close_at", now.toISOString())) as Session[];
