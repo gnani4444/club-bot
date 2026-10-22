@@ -70,7 +70,7 @@ async function postRoster(chat: Chat, s: Session, header?: string) {
 
 const HELP = [
   "*Club Bot*",
-  "!play <sport> [day]  find courts and start a vote (sports: " + Object.keys(sports).join(", ") + ")",
+  "!play <sport> [day] [players]  find courts and start a vote (sports: " + Object.keys(sports).join(", ") + ")",
   "1 3  vote by number, several allowed (or tick the poll)",
   "!close  pick the winning slot and make the roster",
   "!booked  confirm the court is booked",
@@ -113,11 +113,12 @@ export async function onGroup(chat: Chat, groupJid: string, sender: string, send
         return true;
       }
       if (!slots.length) { await chat.send(groupJid, `No ${sport} courts free on ${date}.`); return true; }
-      const s = must(await db.from("sessions").insert({ sport, group_jid: groupJid, capacity: sports[sport].playersPerCourt }).select().single()) as Session;
+      const capacity = Number(args[2]) > 0 ? Number(args[2]) : sports[sport].playersPerCourt; // e.g. 2 for singles
+      const s = must(await db.from("sessions").insert({ sport, group_jid: groupJid, capacity }).select().single()) as Session;
       must(await db.from("slots").insert(slots.map((p, i) => ({ session_id: s.id, idx: i + 1, payload: p }))));
       const day = new Date(slots[0].start).toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
       await chat.poll(groupJid, `${sports[sport].name} ${day}: pick every time you can play (or reply e.g. 1 3)`,
-        slots.map((p) => `${windowLabel(p)} · from ${pounds(Math.ceil(p.courtPricePence / sports[sport].playersPerCourt))}pp`));
+        slots.map((p) => `${windowLabel(p)} · from ${pounds(Math.ceil(p.courtPricePence / capacity))}pp`));
       return true;
     }
 
