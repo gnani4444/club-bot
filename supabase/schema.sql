@@ -68,3 +68,5 @@ create table if not exists schedules (
 alter table schedules enable row level security;
 alter table sessions add column if not exists auto_close_at timestamptz;
 alter table sessions add column if not exists organiser text;
+-- Live dashboard also streams votes.
+alter publication supabase_realtime add table votes;

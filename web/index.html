@@ -4,46 +4,275 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Club Bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#f6f7f4; --card:#fff; --ink:#1b1f1a; --muted:#6b7266; --in:#1f7a3f; --wait:#b26b00; --out:#a33; --line:#e3e6df; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#121411; --card:#1b1e1a; --ink:#eef0ea; --muted:#9aa294; --line:#2b2f29; --in:#5cc282; --wait:#e0a040; --out:#e57373; } }
-  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.4 system-ui, sans-serif; }
-  main { max-width:720px; margin:0 auto; padding:24px 16px; }
-  h1 { font-size:22px; margin:0 0 4px; } .sub { color:var(--muted); margin:0 0 20px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
-  .card h2 { font-size:17px; margin:0 0 4px; } .meta { color:var(--muted); font-size:14px; margin-bottom:12px; }
-  ul { list-style:none; padding:0; margin:0; } li { display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--line); }
-  .in { color:var(--in); } .waitlist, .offered { color:var(--wait); } .out { color:var(--out); text-decoration:line-through; }
-  .empty { color:var(--muted); }
+  :root {
+    --bg: #f4f5f0; --panel: #ffffff; --ink: #14170f; --muted: #6a7064; --line: #e4e7de;
+    --accent: #c6f432; --accent-ink: #1d2a00; --in: #1f8a4c; --wait: #c27a00; --out: #b3392f; --bar: #e9ecdf;
+    --shadow: 0 1px 2px rgba(20,23,15,.04), 0 8px 24px rgba(20,23,15,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d0f0b; --panel: #161a12; --ink: #eef2e6; --muted: #8f978a; --line: #262c20;
+      --accent: #c6f432; --accent-ink: #1d2a00; --in: #5fd18d; --wait: #f0b14a; --out: #f07a6e; --bar: #20261a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35); }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 16px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; letter-spacing: -.02em; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: var(--accent); display: grid; place-items: center; font-size: 18px; }
+  .live { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--in); box-shadow: 0 0 0 0 var(--in); animation: pulse 2s infinite; }
+  .dot.off { background: var(--muted); animation: none; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--in) 60%, transparent); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+  .hero { background: var(--ink); color: var(--bg); border-radius: 22px; padding: 28px; display: grid; grid-template-columns: 1.4fr 1fr; gap: 24px; box-shadow: var(--shadow); }
+  @media (prefers-color-scheme: dark) { .hero { background: #1c2216; color: var(--ink); } }
+  .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; opacity: .65; font-weight: 600; }
+  .hero h1 { font-size: 34px; line-height: 1.1; margin: 8px 0 6px; letter-spacing: -.03em; }
+  .hero .where { opacity: .75; }
+  .hero a { color: inherit; }
+  .count { text-align: right; align-self: center; }
+  .count .num { font: 500 44px/1 "JetBrains Mono", monospace; letter-spacing: -.03em; }
+  .count .lbl { opacity: .65; font-size: 13px; margin-top: 6px; }
+  .steps { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 4px; }
+  .step { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.07); font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; opacity: .55; }
+  .step.done { opacity: 1; }
+  .step.now { opacity: 1; background: var(--accent); color: var(--accent-ink); }
+  .step i { font-style: normal; }
+
+  .grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; margin-top: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 20px; box-shadow: var(--shadow); }
+  .card h2 { font-size: 14px; margin: 0 0 14px; display: flex; justify-content: space-between; align-items: baseline; }
+  .card h2 small { color: var(--muted); font-weight: 500; }
+
+  .bar { display: grid; grid-template-columns: 92px 1fr 40px; align-items: center; gap: 10px; margin: 8px 0; font-size: 14px; }
+  .bar .t { font-weight: 600; white-space: nowrap; }
+  .track { height: 28px; background: var(--bar); border-radius: 8px; overflow: hidden; position: relative; }
+  .fill { height: 100%; background: color-mix(in srgb, var(--accent) 70%, var(--panel)); border-radius: 8px; transition: width .6s cubic-bezier(.2,.8,.2,1); }
+  .bar.win .fill { background: var(--accent); }
+  .track span { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--muted); }
+  .bar .n { text-align: right; font: 500 14px "JetBrains Mono", monospace; }
+
+  .people { list-style: none; margin: 0; padding: 0; }
+  .person { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .person:first-child { border-top: 0; }
+  .av { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 14px; flex: none; color: #fff; }
+  .who { flex: 1; min-width: 0; }
+  .who b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who small { color: var(--muted); }
+  .pill { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+  .pill.in { color: var(--in); border-color: color-mix(in srgb, var(--in) 35%, transparent); }
+  .pill.paid { background: var(--in); color: #fff; border-color: transparent; }
+  .pill.waitlist, .pill.offered { color: var(--wait); border-color: color-mix(in srgb, var(--wait) 35%, transparent); }
+  .pill.out { color: var(--out); border-color: color-mix(in srgb, var(--out) 35%, transparent); }
+  .person.out b { text-decoration: line-through; opacity: .6; }
+  .seats { display: flex; gap: 6px; margin-bottom: 12px; }
+  .seat { flex: 1; height: 8px; border-radius: 4px; background: var(--bar); }
+  .seat.on { background: var(--in); }
+
+  .money { display: flex; justify-content: space-between; align-items: end; }
+  .money .big { font: 500 30px/1 "JetBrains Mono", monospace; letter-spacing: -.02em; }
+  .progress { height: 10px; background: var(--bar); border-radius: 5px; overflow: hidden; margin: 14px 0 6px; }
+  .progress div { height: 100%; background: var(--in); transition: width .6s; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .side { display: grid; gap: 16px; align-content: start; }
+  .row { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .row:first-of-type { border-top: 0; }
+  code { font: 500 13px "JetBrains Mono", monospace; background: var(--bar); padding: 2px 6px; border-radius: 6px; }
+  .empty { text-align: center; padding: 56px 20px; }
+  .empty h1 { font-size: 26px; margin: 12px 0 8px; letter-spacing: -.02em; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab { border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 8px 14px; border-radius: 999px; font: 600 13px Inter, sans-serif; cursor: pointer; }
+  .tab[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: var(--shadow); } }
+  @media (max-width: 820px) {
+    .hero, .grid { grid-template-columns: 1fr; }
+    .count { text-align: left; }
+    .steps { grid-template-columns: repeat(2, 1fr); }
+    .hero h1 { font-size: 28px; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <h1>Club Bot</h1>
-  <p class="sub">Live roster · updates as players vote, drop out and pay</p>
-  <div id="app" class="empty">Loading…</div>
-</main>
+<div class="wrap">
+  <header>
+    <div class="brand"><div class="logo">🏸</div>Club Bot</div>
+    <div class="live"><span class="dot" id="dot"></span><span id="liveText">Connecting…</span></div>
+  </header>
+  <div id="tabs" class="tabs"></div>
+  <main id="app"></main>
+</div>
 <script>
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const when = (iso) => iso ? new Date(iso).toLocaleString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "vote in progress";
-async function render() {
-  const { sessions, rsvps } = await (await fetch("/api/state")).json();
-  const app = document.getElementById("app");
-  if (!sessions.length) { app.innerHTML = "No open sessions. Send !play badminton sat in the group."; return; }
-  app.className = "";
-  app.innerHTML = sessions.map((s) => {
-    const rows = rsvps.filter((r) => r.session_id === s.id);
-    const playing = rows.filter((r) => r.status === "in").length;
-    return `<section class="card">
-      <h2>${esc(s.sport)} · ${esc(s.venue_name ?? "")}</h2>
-      <div class="meta">${esc(when(s.start_at))} · ${esc(s.status)} · ${playing}/${esc(s.capacity)} playing${s.court_price_pence ? ` · £${(s.court_price_pence / 100).toFixed(2)}` : ""}</div>
-      <ul>${rows.map((r) => `<li><span class="${esc(r.status)}">${esc(r.players?.name ?? "player")}</span><span>${esc(r.status)}${r.status === "in" ? (r.paid ? " · paid ✅" : " · unpaid") : ""}</span></li>`).join("") || '<li class="empty">No roster yet</li>'}</ul>
-    </section>`;
-  }).join("");
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const tz = { timeZone: "Europe/London" };
+const fmtDay = (iso) => new Date(iso).toLocaleDateString("en-GB", { ...tz, weekday: "long", day: "numeric", month: "long" });
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString("en-GB", { ...tz, hour: "numeric", minute: "2-digit", hour12: true }).replace(":00", "").replace(/\s/g, "").toLowerCase();
+const win = (p) => `${fmtTime(p.start)}–${fmtTime(p.end)}`;
+const gbp = (p) => `£${(p / 100).toFixed(2)}`;
+const SPORT = { badminton: "🏸", tennis: "🎾" };
+const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const COLORS = ["#2f7d5b", "#7b4fd6", "#d0632c", "#2f6fd0", "#c03b6b", "#8a8f2a", "#0f8a8a"];
+function who(r) {
+  const n = r.players?.name;
+  if (n) return n;
+  const id = r.player_id || "";
+  return id.endsWith("@s.whatsapp.net") ? "+" + id.split("@")[0] : "Player";
 }
-render();
-new EventSource("/events").onmessage = render;
-setInterval(render, 10000);
+const initials = (n) => n.replace(/^\+/, "").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+const color = (id) => COLORS[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % COLORS.length];
+
+let state = null, selected = null, prev = "";
+
+function countdown(s) {
+  const target = s.venue_name ? s.start_at : s.auto_close_at;
+  if (!target) return { num: "—", lbl: "" };
+  let ms = Date.parse(target) - Date.now();
+  if (ms <= 0) return { num: s.venue_name ? "On now" : "Closing…", lbl: "" };
+  const d = Math.floor(ms / 864e5); ms %= 864e5;
+  const h = Math.floor(ms / 36e5); ms %= 36e5;
+  const m = Math.floor(ms / 6e4), sec = Math.floor((ms % 6e4) / 1e3);
+  const num = d ? `${d}d ${h}h ${m}m` : `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return { num, lbl: s.venue_name ? "until game time" : "until the vote closes" };
+}
+
+function stage(s, rows) {
+  const playing = rows.filter((r) => r.status === "in");
+  const paid = playing.length && playing.every((r) => r.paid);
+  if (!s.venue_name) return 0;
+  if (s.status !== "booked") return 1;
+  return paid ? 3 : 2;
+}
+
+function render() {
+  if (!state) return;
+  const { sessions, rsvps, slots, votes, schedules, recent } = state;
+  const app = $("#app");
+  const sch = schedules[0];
+  if (!sessions.length) {
+    $("#tabs").innerHTML = "";
+    app.innerHTML = `<div class="card empty"><div style="font-size:44px">🏸</div><h1>No game on right now</h1>
+      <p class="muted">Send <code>!play badminton sat</code> in the WhatsApp group to start a vote.</p>
+      ${sch ? `<p class="muted">Next weekly poll: <b>${DOW[sch.post_dow]} ${sch.post_hour}:00</b> for ${esc(sch.sport)} on ${esc(sch.play_day)}.</p>` : `<p class="muted">Or automate it: <code>!weekly badminton sat</code></p>`}
+      ${historyCard(recent)}</div>`;
+    return;
+  }
+  if (!sessions.some((s) => s.id === selected)) selected = sessions[0].id;
+  $("#tabs").innerHTML = sessions.length > 1 ? sessions.map((s) =>
+    `<button class="tab" aria-pressed="${s.id === selected}" data-id="${s.id}">${SPORT[s.sport] ?? "🎯"} ${esc(s.sport)} · ${s.start_at ? fmtDay(s.start_at).split(" ").slice(0, 3).join(" ") : "voting"}</button>`).join("") : "";
+  document.querySelectorAll(".tab").forEach((b) => b.onclick = () => { selected = Number(b.dataset.id); render(); });
+
+  const s = sessions.find((x) => x.id === selected);
+  const rows = rsvps.filter((r) => r.session_id === s.id);
+  const sSlots = slots.filter((x) => x.session_id === s.id);
+  const sVotes = votes.filter((v) => v.session_id === s.id);
+  const playing = rows.filter((r) => r.status === "in");
+  const waiting = rows.filter((r) => r.status === "waitlist" || r.status === "offered");
+  const out = rows.filter((r) => r.status === "out");
+  const st = stage(s, rows);
+  const cd = countdown(s);
+  const firstSlot = sSlots[0]?.payload;
+  const winIdx = sSlots.find((x) => s.start_at && Date.parse(x.payload.start) === Date.parse(s.start_at) && x.payload.venueName === s.venue_name)?.idx;
+  const steps = ["🗳️ Voting", "📅 Booking", "💷 Paying", "✅ All set"];
+
+  const tally = sSlots.map((x) => ({ ...x, n: sVotes.filter((v) => v.idx === x.idx).length }));
+  const max = Math.max(1, ...tally.map((t) => t.n));
+  const voters = new Set(sVotes.map((v) => v.player_id)).size;
+  const share = s.court_price_pence && playing.length ? Math.ceil(s.court_price_pence / playing.length) : 0;
+  const paidCount = playing.filter((r) => r.paid).length;
+
+  const person = (r) => {
+    const n = who(r);
+    const pill = r.status === "in" ? (r.paid ? `<span class="pill paid">Paid</span>` : `<span class="pill in">Playing</span>`)
+      : r.status === "offered" ? `<span class="pill offered">Offered spot</span>`
+      : r.status === "waitlist" ? `<span class="pill waitlist">Waitlist #${waiting.indexOf(r) + 1}</span>`
+      : `<span class="pill out">Dropped out</span>`;
+    return `<li class="person ${r.status}"><div class="av" style="background:${color(r.player_id)}">${esc(initials(n))}</div>
+      <div class="who"><b>${esc(n)}</b><small>${r.status === "in" && share ? `owes ${gbp(share)}` : ""}</small></div>${pill}</li>`;
+  };
+
+  app.innerHTML = `
+    <section class="hero">
+      <div>
+        <div class="eyebrow">${SPORT[s.sport] ?? ""} ${esc(s.sport)} · ${s.venue_name ? "game" : "vote open"}</div>
+        <h1>${s.venue_name ? `${fmtDay(s.start_at)}, ${win({ start: s.start_at, end: s.end_at })}` : firstSlot ? `Picking a time for ${fmtDay(firstSlot.start)}` : "Picking a time"}</h1>
+        <div class="where">${s.venue_name ? `📍 ${esc(s.venue_name)}${s.maps_url ? ` · <a href="${esc(s.maps_url)}" target="_blank" rel="noopener">map</a>` : ""}${s.booking_url ? ` · <a href="${esc(s.booking_url)}" target="_blank" rel="noopener">booking page</a>` : ""}` : `${voters} ${voters === 1 ? "person has" : "people have"} voted`}</div>
+      </div>
+      <div class="count"><div class="num" id="cd">${cd.num}</div><div class="lbl" id="cdl">${cd.lbl}</div></div>
+      <div class="steps">${steps.map((t, i) => `<div class="step ${i < st ? "done" : i === st ? "now" : ""}"><i>${i < st ? "✓" : ""}</i>${t}</div>`).join("")}</div>
+    </section>
+    <div class="grid">
+      <div class="card">
+        <h2>${s.venue_name ? "Who's playing" : "Poll results"} <small>${s.venue_name ? `${playing.length}/${s.capacity} spots` : `${voters} voter${voters === 1 ? "" : "s"}`}</small></h2>
+        ${s.venue_name ? `
+          <div class="seats">${Array.from({ length: s.capacity }, (_, i) => `<div class="seat ${i < playing.length ? "on" : ""}"></div>`).join("")}</div>
+          <ul class="people">${playing.map(person).join("") || `<li class="muted">Nobody yet</li>`}</ul>
+          ${waiting.length ? `<h2 style="margin-top:18px">Waitlist <small>first reliable player gets the next spot</small></h2><ul class="people">${waiting.map(person).join("")}</ul>` : ""}
+          ${out.length ? `<h2 style="margin-top:18px">Dropped out</h2><ul class="people">${out.map(person).join("")}</ul>` : ""}
+        ` : tally.map((t) => `
+          <div class="bar ${t.n === max && t.n > 0 ? "win" : ""}"><div class="t">${win(t.payload)}</div>
+            <div class="track"><div class="fill" style="width:${(t.n / max) * 100}%"></div>${t.n ? "" : `<span>${esc(t.payload.venueName)}</span>`}</div>
+            <div class="n">${t.n}</div></div>`).join("")}
+      </div>
+      <div class="side">
+        ${s.venue_name ? `
+        <div class="card">
+          <h2>Court fee <small>${esc(s.venue_name)}</small></h2>
+          <div class="money"><div><div class="big">${gbp(s.court_price_pence ?? 0)}</div><div class="muted">${share ? `${gbp(share)} each · ${playing.length} players` : ""}</div></div>
+          <div style="text-align:right"><div class="big">${paidCount}/${playing.length}</div><div class="muted">paid</div></div></div>
+          <div class="progress"><div style="width:${playing.length ? (paidCount / playing.length) * 100 : 0}%"></div></div>
+          <div class="muted">${s.pay_link ? "Payment links sent by DM" : "Send <code>!pay</code> in the group to split the cost"}</div>
+        </div>` : `
+        <div class="card">
+          <h2>How it closes</h2>
+          <div class="muted">The vote closes automatically ${s.auto_close_at ? `on <b>${new Date(s.auto_close_at).toLocaleString("en-GB", { ...tz, weekday: "short", hour: "numeric", minute: "2-digit" })}</b>` : ""} or as soon as everyone in the group has voted. The most popular time wins and the bot posts the booking link.</div>
+        </div>`}
+        <div class="card">
+          <h2>Automation</h2>
+          <div class="row"><span>Weekly poll</span><b>${sch ? `${DOW[sch.post_dow]} ${sch.post_hour}:00` : "Off"}</b></div>
+          <div class="row"><span>Auto-close</span><b>48h or all voted</b></div>
+          <div class="row"><span>Reminders</span><b>2h + 30m before</b></div>
+          <div class="row"><span>Drop-outs</span><b>Waitlist auto-fill</b></div>
+        </div>
+        ${historyCard(recent)}
+      </div>
+    </div>`;
+
+  const sig = JSON.stringify([rows.map((r) => [r.player_id, r.status, r.paid]), sVotes.length]);
+  if (prev && prev !== sig) document.querySelectorAll(".card").forEach((c) => c.classList.add("flash"));
+  prev = sig;
+}
+
+function historyCard(recent) {
+  if (!recent?.length) return "";
+  return `<div class="card" style="text-align:left"><h2>Recent games</h2>${recent.map((r) =>
+    `<div class="row"><span>${SPORT[r.sport] ?? ""} ${r.start_at ? fmtDay(r.start_at) : "—"}</span><span class="muted">${esc(r.venue_name ?? "")}</span></div>`).join("")}</div>`;
+}
+
+async function load() {
+  try {
+    state = await (await fetch("/api/state")).json();
+    render();
+  } catch { $("#liveText").textContent = "Offline"; $("#dot").classList.add("off"); }
+}
+
+setInterval(() => {
+  const s = state?.sessions?.find((x) => x.id === selected);
+  if (!s) return;
+  const cd = countdown(s);
+  if ($("#cd")) { $("#cd").textContent = cd.num; $("#cdl").textContent = cd.lbl; }
+}, 1000);
+
+const es = new EventSource("/events");
+es.onopen = () => { $("#liveText").textContent = "Live from WhatsApp"; $("#dot").classList.remove("off"); };
+es.onerror = () => { $("#liveText").textContent = "Reconnecting…"; $("#dot").classList.add("off"); };
+es.onmessage = load;
+load();
+setInterval(load, 15000);
 </script>
 </body>
 </html>
