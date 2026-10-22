@@ -1,5 +1,5 @@
 // WhatsApp transport via Baileys (unofficial). Use a spare number: WhatsApp may ban automated accounts.
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, decryptPollVote, getKeyAuthor, type WAMessage, type WASocket } from "@whiskeysockets/baileys";
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, decryptPollVote, jidNormalizedUser, type WAMessage, type WASocket } from "@whiskeysockets/baileys";
 import { createHash } from "node:crypto";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
@@ -63,6 +63,13 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
     });
   };
 
+  /** Sender's JIDs without device suffix: primary first (group: participant, DM: chat), then the phone/@lid alternative. */
+  const senderIds = (m: WAMessage) => {
+    const group = m.key.remoteJid!.endsWith("@g.us");
+    return (group ? [m.key.participant, m.key.participantAlt] : [m.key.remoteJid, m.key.remoteJidAlt])
+      .filter(Boolean).map((j) => jidNormalizedUser(j!));
+  };
+
   const route = async (m: WAMessage) => {
     const jid = m.key.remoteJid;
     if (!jid || m.key.fromMe || !m.message) return;
@@ -73,20 +80,22 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
       const poll = polls.get(vote.pollCreationMessageKey?.id ?? "");
       const secret = poll?.msg.message?.messageContextInfo?.messageSecret;
       if (!poll || !secret || !vote.vote) return;
-      // Try both of our identities (phone JID and @lid): WhatsApp signs with whichever the group uses.
-      for (const me of [sock.user?.id, sock.user?.lid].filter(Boolean) as string[]) {
-        try {
-          const dec = decryptPollVote(vote.vote, {
-            pollEncKey: secret, pollMsgId: poll.msg.key.id!,
-            pollCreatorJid: getKeyAuthor(poll.msg.key, me), voterJid: getKeyAuthor(m.key, me),
-          });
-          // Each update carries the voter's full current selection (empty = all unticked).
-          const idxs = (dec.selectedOptions ?? []).map((o) => poll.hashes.indexOf(Buffer.from(o).toString("hex")) + 1).filter((i) => i > 0);
-          const ids = (isGroup ? [m.key.participant, m.key.participantAlt] : [jid, m.key.remoteJidAlt]).filter(Boolean) as string[];
+      // Vote is signed with device-free JIDs, phone or @lid depending on the chat: try each pairing.
+      const creators = [sock.user?.id, sock.user?.lid];
+      const voters = m.key.fromMe ? creators : isGroup ? [m.key.participant, m.key.participantAlt] : [jid, m.key.remoteJidAlt];
+      for (const c of creators.filter(Boolean).map((j) => jidNormalizedUser(j!))) {
+        for (const v of voters.filter(Boolean).map((j) => jidNormalizedUser(j!))) {
+          let idxs: number[];
+          try {
+            const dec = decryptPollVote(vote.vote, { pollEncKey: secret, pollMsgId: poll.msg.key.id!, pollCreatorJid: c, voterJid: v });
+            // Each update carries the voter's full current selection (empty = all unticked).
+            idxs = (dec.selectedOptions ?? []).map((o) => poll.hashes.indexOf(Buffer.from(o).toString("hex")) + 1).filter((i) => i > 0);
+          } catch { continue; /* wrong pairing */ }
+          const ids = senderIds(m);
           if (poll.onVote) { if (idxs.length) await poll.onVote(ids, idxs); }
           else if (isGroup) await h.pollVote(jid, ids[0], idxs);
           return;
-        } catch { /* wrong identity, try next */ }
+        }
       }
       console.warn("[poll] could not decrypt vote; players can reply with the option number instead");
       return;
@@ -96,10 +105,9 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
     if (!text) return;
     if (isGroup) {
       const mentions = m.message.extendedTextMessage?.contextInfo?.mentionedJid ?? [];
-      await h.group(chat, jid, m.key.participant!, m.pushName ?? null, text, mentions);
+      await h.group(chat, jid, senderIds(m)[0], m.pushName ?? null, text, mentions.map((j) => jidNormalizedUser(j)));
     } else {
-      const ids = [jid, m.key.remoteJidAlt].filter(Boolean) as string[];
-      await h.dm(chat, ids, text);
+      await h.dm(chat, senderIds(m), text);
     }
   };
 
