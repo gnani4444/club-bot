@@ -8,7 +8,7 @@ import type { Chat } from "./club.js";
 export interface Handlers {
   group(chat: Chat, groupJid: string, sender: string, name: string | null, text: string, mentions: string[]): Promise<unknown>;
   dm(chat: Chat, ids: string[], text: string): Promise<unknown>;
-  pollVote(chat: Chat, groupJid: string, voter: string, idxs: number[]): Promise<unknown>;
+  pollVote(chat: Chat, groupJid: string, voterIds: string[], idxs: number[]): Promise<unknown>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -30,8 +30,9 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
   const chat: Chat = {
     members: async (jid) => {
       const meta = await sock.groupMetadata(jid);
-      const me = [sock.user?.id, sock.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j!));
-      return meta.participants.map((p) => jidNormalizedUser(p.id)).filter((j) => !me.includes(j));
+      const me = await myIds();
+      const people = await Promise.all(meta.participants.map((p) => identities(p.id, (p as { phoneNumber?: string }).phoneNumber)));
+      return people.filter((ids) => !ids.some((i) => me.includes(i))).map((ids) => ids[0]);
     },
     send: (jid, text, mentions) => enqueue(() => sock.sendMessage(jid, { text, mentions })),
     poll: (jid, name, values, opts) =>
@@ -68,19 +69,31 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
     });
   };
 
-  /** Sender's JIDs without device suffix: primary first (group: participant, DM: chat), then the phone/@lid alternative. */
-  const senderIds = (m: WAMessage) => {
-    const group = m.key.remoteJid!.endsWith("@g.us");
-    // Phone JID first: DMs to @lid addresses don't reliably arrive.
-    return (group ? [m.key.participant, m.key.participantAlt] : [m.key.remoteJid, m.key.remoteJidAlt])
-      .filter(Boolean).map((j) => jidNormalizedUser(j!))
-      .sort((a, b) => Number(b.endsWith("@s.whatsapp.net")) - Number(a.endsWith("@s.whatsapp.net")));
+  /**
+   * Every JID for one person, device suffix removed, phone JID first (DMs to @lid don't reliably arrive).
+   * WhatsApp often sends only the @lid form (e.g. on poll taps), so the other form comes from Baileys' LID map.
+   */
+  const identities = async (...jids: (string | null | undefined)[]) => {
+    const out = new Set(jids.filter(Boolean).map((j) => jidNormalizedUser(j!)));
+    for (const j of [...out]) {
+      const other = j.endsWith("@lid")
+        ? await sock.signalRepository.lidMapping.getPNForLID(j).catch(() => null)
+        : await sock.signalRepository.lidMapping.getLIDForPN(j).catch(() => null);
+      if (other) out.add(jidNormalizedUser(other));
+    }
+    return [...out].sort((a, b) => Number(b.endsWith("@s.whatsapp.net")) - Number(a.endsWith("@s.whatsapp.net")));
   };
+  const senderIds = (m: WAMessage) =>
+    m.key.remoteJid!.endsWith("@g.us") ? identities(m.key.participant, m.key.participantAlt) : identities(m.key.remoteJid, m.key.remoteJidAlt);
+  const myIds = () => identities(sock.user?.id, sock.user?.lid);
 
   const route = async (m: WAMessage) => {
     const jid = m.key.remoteJid;
     if (!jid || m.key.fromMe || !m.message) return;
     const isGroup = jid.endsWith("@g.us");
+    const from = await senderIds(m);
+    const me = await myIds();
+    if (from.some((i) => me.includes(i))) return; // the bot's own phone: never a player
 
     const vote = m.message.pollUpdateMessage;
     if (vote) {
@@ -98,9 +111,10 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
             // Each update carries the voter's full current selection (empty = all unticked).
             idxs = (dec.selectedOptions ?? []).map((o) => poll.hashes.indexOf(Buffer.from(o).toString("hex")) + 1).filter((i) => i > 0);
           } catch { continue; /* wrong pairing */ }
-          const ids = senderIds(m);
+          const ids = from;
+          console.log("[poll tap]", ids[0], idxs);
           if (poll.onVote) { if (idxs.length) await poll.onVote(ids, idxs); }
-          else if (isGroup) await h.pollVote(chat, jid, ids[0], idxs);
+          else if (isGroup) await h.pollVote(chat, jid, ids, idxs);
           return;
         }
       }
@@ -112,9 +126,9 @@ export async function startWhatsApp(h: Handlers): Promise<Chat> {
     if (!text) return;
     if (isGroup) {
       const mentions = m.message.extendedTextMessage?.contextInfo?.mentionedJid ?? [];
-      await h.group(chat, jid, senderIds(m)[0], m.pushName ?? null, text, mentions.map((j) => jidNormalizedUser(j)));
+      await h.group(chat, jid, from[0], m.pushName ?? null, text, mentions.map((j) => jidNormalizedUser(j)));
     } else {
-      await h.dm(chat, senderIds(m), text);
+      await h.dm(chat, from, text);
     }
   };
 

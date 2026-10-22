@@ -37,7 +37,7 @@ try {
 
   step("votes: numbers + poll vote, re-vote overrides");
   await g(a, "2 3"); await g(b, "2"); await g(c, "1"); await g(d, "2, 5, 99"); // multi-choice; 99 ignored
-  await onPollVote(chat, G, e, [2]); await g(c, "2"); // c changes mind (replaces "1")
+  await onPollVote(chat, G, [e], [2]); await g(c, "2"); // c changes mind (replaces "1")
   await g(org, "!close");
   assert.ok(sent.some((m) => m.to === G && /11am–1pm wins \(5 free\)/.test(m.text)));
   assert.match(last(G), /\[POLL\] Court booked\?/); assert.match(last(org), /Book .* here/);
@@ -60,6 +60,10 @@ try {
   await tap(b, 2); // b taps "Can't make it" on the reminder
   assert.match(last(G), /dropped out/); assert.match(last(c), /Want the spot/);
   await tap(c, 1); // c taps "Take the spot" assert.match(last(G), /takes the spot/); console.log(last(G));
+
+  step("untick the winning time in the poll = drop out");
+  await onPollVote(chat, G, [e], [3]); // e unticks 11am–1pm (option 2)
+  assert.ok(sent.some((m) => m.to === G && /@e2e-e dropped out/.test(m.text)));
 
   step("drop-out with empty waitlist");
   await onDm(chat, [d], "OUT");
@@ -97,7 +101,7 @@ try {
   members = [a, b];
   await g(org, "!play tennis sat 2"); assert.match(last(G), /or when everyone has voted/);
   await g(a, "1"); assert.match(last(G), /\[POLL\] Tennis/); // b hasn't voted
-  await onPollVote(chat, G, b, [1]);
+  await onPollVote(chat, G, [b], [1]);
   assert.ok(sent.some((m) => m.to === G && /Everyone has voted/.test(m.text)));
   assert.match(last(G), /\[POLL\] Court booked\?/);
 

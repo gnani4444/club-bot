@@ -297,11 +297,19 @@ export async function recordVotes(sessionId: number, playerId: string, idxs: num
 }
 
 /** Poll vote from WhatsApp poll UI (full current selection): newest polling session in the group. */
-export async function onPollVote(chat: Chat, groupJid: string, voter: string, idxs: number[]) {
-  const s = await openSession(groupJid, ["polling"]);
-  if (!s || s.venue_name) return;
-  await recordVotes(s.id, voter, idxs);
-  await closeIfEveryoneVoted(chat, s);
+export async function onPollVote(chat: Chat, groupJid: string, ids: string[], idxs: number[]) {
+  const s = await openSession(groupJid, ["polling", "booked"]);
+  if (!s) return;
+  if (!s.venue_name) {
+    await recordVotes(s.id, ids[0], idxs);
+    await closeIfEveryoneVoted(chat, s);
+    return;
+  }
+  // Vote already closed: a confirmed player unticking the winning time = dropping out.
+  const slots = must(await db.from("slots").select("idx, payload").eq("session_id", s.id)) as { idx: number; payload: Slot }[];
+  const win = slots.find((x) => Date.parse(x.payload.start) === Date.parse(s.start_at ?? "") && x.payload.venueName === s.venue_name)?.idx;
+  const playing = (await rsvps(s.id)).some((r) => r.status === "in" && ids.includes(r.player_id));
+  if (win && playing && !idxs.includes(win)) await onDm(chat, ids, "OUT");
 }
 
 /** Close the vote early once every group member has voted. */
