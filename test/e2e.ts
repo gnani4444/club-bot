@@ -32,7 +32,7 @@ try {
   await g(org, "!close"); assert.match(last(G), /No vote running/);
 
   step("play: search + poll");
-  await g(org, "!play badminton sat");
+  await g(org, "!play badminton sat 4"); // explicit 4: default is now 2
   assert.match(last(G), /\[POLL\] Badminton/); assert.match(last(G), /12–2pm/); console.log(last(G));
 
   step("votes: numbers + poll vote, re-vote overrides");

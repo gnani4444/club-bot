@@ -4,7 +4,7 @@ import { fixtureVenue } from "../venues/fixture.js";
 export const badminton: Sport = {
   id: "badminton",
   name: "Badminton",
-  playersPerCourt: 4,
+  playersPerCourt: 2,
   sessionHours: 2,
   venues: [
     fixtureVenue({
